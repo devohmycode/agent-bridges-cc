@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Generate one self-contained Claude Code plugin per provider:
 //   core/ (shared runtime) + providers/<id>.mjs + templates/ -> plugins/<plugin>/
+// plus the Bridges Hub, which chains the installed bridges:
+//   hub/ + the core libraries it reuses -> plugins/bridges-hub/
 // Claude Code copies each plugin directory on install, so nothing may be
 // shared across plugins at run time; the generated trees are committed.
 //
@@ -17,6 +19,17 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CORE = path.join(ROOT, "core");
 const PROVIDERS = path.join(ROOT, "providers");
 const TEMPLATES = path.join(ROOT, "templates");
+const HUB = path.join(ROOT, "hub");
+const HUB_PLUGIN = "bridges-hub";
+// Core modules the hub reuses for its job state, rendering and session hook.
+// The agent runtime (agent.mjs, launch.mjs) stays out: the hub drives no CLI.
+const HUB_CORE_FILES = [
+  "hooks/hooks.json",
+  "scripts/session-lifecycle-hook.mjs",
+  ...["adapter", "args", "fs", "git", "job-control", "process", "render", "state", "tracked-jobs", "workspace"].map(
+    (name) => `scripts/lib/${name}.mjs`
+  )
+];
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 const MARKETPLACE_NAME = "agent-bridges";
 const AUTHOR = { name: "DevOhMyCode" };
@@ -119,6 +132,26 @@ export function buildPlugin(provider, outRoot) {
   writeFile(path.join(out, ".claude-plugin", "plugin.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+const HUB_DESCRIPTION =
+  "Bridges Hub: give a provider a role with profiles, and chain several bridges in multi-provider workflows.";
+
+export function buildHub(outRoot) {
+  const out = path.join(outRoot, "plugins", HUB_PLUGIN);
+  for (const rel of HUB_CORE_FILES) {
+    writeFile(path.join(out, rel), fs.readFileSync(path.join(CORE, rel)));
+  }
+  for (const rel of listFiles(HUB)) {
+    const target = rel === "provider.mjs" ? path.join("scripts", "lib", "provider.mjs") : rel;
+    writeFile(path.join(out, target), fs.readFileSync(path.join(HUB, rel)));
+  }
+  for (const name of ["LICENSE", "NOTICE"]) {
+    writeFile(path.join(out, name), fs.readFileSync(path.join(ROOT, name)));
+  }
+  const manifest = { name: HUB_PLUGIN, version: PACKAGE.version, description: HUB_DESCRIPTION, author: AUTHOR };
+  writeFile(path.join(out, ".claude-plugin", "plugin.json"), `${JSON.stringify(manifest, null, 2)}
+`);
+}
+
 function buildMarketplace(providers, outRoot) {
   const marketplace = {
     name: MARKETPLACE_NAME,
@@ -135,7 +168,14 @@ function buildMarketplace(providers, outRoot) {
         version: PACKAGE.version,
         author: AUTHOR,
         source: `./plugins/${provider.pluginName}`
-      }))
+      })),
+      {
+        name: HUB_PLUGIN,
+        description: HUB_DESCRIPTION,
+        version: PACKAGE.version,
+        author: AUTHOR,
+        source: `./plugins/${HUB_PLUGIN}`
+      }
     ]
   };
   writeFile(path.join(outRoot, ".claude-plugin", "marketplace.json"), `${JSON.stringify(marketplace, null, 2)}\n`);
@@ -147,6 +187,7 @@ export async function build(outRoot) {
   for (const provider of providers) {
     buildPlugin(provider, outRoot);
   }
+  buildHub(outRoot);
   buildMarketplace(providers, outRoot);
   return providers;
 }
@@ -182,7 +223,7 @@ async function main() {
     return;
   }
   const providers = await build(ROOT);
-  process.stdout.write(`Built ${providers.map((provider) => provider.pluginName).join(", ")}.\n`);
+  process.stdout.write(`Built ${[...providers.map((provider) => provider.pluginName), HUB_PLUGIN].join(", ")}.\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -59,6 +59,71 @@ Chaque plugin expose les mêmes commandes sous son propre préfixe
 Options communes : `--wait` / `--background`, `--model <modèle>`, et
 `--effort <niveau>` quand le CLI le permet.
 
+## Profils et workflows (`bridges-hub`)
+
+Le plugin `bridges-hub` pilote les bridges installés :
+
+- un **profil** donne un rôle à l'agent d'un provider (revue de sécurité,
+  critique d'architecture, écriture de tests…) ;
+- un **workflow** enchaîne plusieurs providers sur une même tâche, par exemple
+  Cursor implémente, Codex et Grok Build relisent en parallèle, puis Cursor
+  applique les corrections.
+
+```text
+/plugin install bridges-hub@agent-bridges
+/bridges-hub:check                                   # bridges utilisables
+/bridges-hub:list                                    # profils et workflows
+/bridges-hub:ask codex --profile security-review audite le flux de connexion
+/bridges-hub:flow implement-review ajoute une option --verbose au build
+/bridges-hub:flow --dry-run multi-review             # aperçu, n'exécute rien
+```
+
+`runs`, `show` et `stop` fonctionnent comme dans les bridges. Chaque étape
+passe par le script du plugin du provider (`run`/`task --json`) : elle
+apparaît donc aussi dans les `runs` de ce bridge. Les étapes en lecture
+tournent en parallèle ; une étape `write` tourne toujours seule, car toutes
+partagent le même arbre de travail.
+
+Fournis : les profils `security-review`, `performance-review`,
+`architecture-critic`, `test-writer`, `implementer`, `docs-writer` ; les
+workflows `implement-review`, `multi-review`, `security-audit`.
+
+Les fichiers personnalisés sont en Markdown avec un frontmatter plat. Un
+fichier de projet remplace un fichier utilisateur, qui remplace un fichier
+fourni du même nom :
+
+| Niveau | Emplacement |
+| --- | --- |
+| projet | `.claude/bridges-hub/{profiles,workflows}/*.md` |
+| utilisateur | `~/.claude/bridges-hub/{profiles,workflows}/*.md` |
+| fourni | `plugins/bridges-hub/{profiles,workflows}/` |
+
+```markdown
+---
+name: review-then-fix
+description: Codex relit, Cursor corrige
+---
+## review
+provider: codex
+profile: security-review
+
+Relis les changements non commités faits pour : {{task}}
+
+## fix
+provider: cursor
+mode: write
+after: review
+
+Corrige ce qui est fondé dans cette revue : {{steps.review.output}}
+```
+
+Clés d'étape : `provider`, `profile`, `mode` (`read`/`write`), `model`,
+`effort`, `after`, `on_failure` (`stop`/`continue`). Variables : `{{task}}`,
+`{{vars.<nom>}}` (`--var nom=valeur`), `{{steps.<id>.output}}` et
+`{{steps.<id>.status}}`. `/bridges-hub:new-profile` et
+`/bridges-hub:new-workflow` rédigent et valident un fichier pour vous ;
+`validate [nom|fichier]` en vérifie un à la main.
+
 ## Correspondance avec chaque CLI
 
 | | Lecture seule (review, critique) | Écriture (delegate) | Reprise | `--effort` |
@@ -121,6 +186,8 @@ npm test
 - `core/` : moteur commun (pont, suivi des exécutions, git, rendu, hooks).
 - `providers/<id>.mjs` : un adaptateur par CLI (voir `providers/README.md`).
 - `templates/` : commandes, agent et compétences, avec des variables `{{…}}`.
+- `hub/` : le plugin `bridges-hub` (runner, profils, workflows, commandes) ;
+  le build y ajoute les bibliothèques du core qu'il réutilise.
 - `plugins/` : **généré**, à ne pas modifier à la main ; il est versionné
   parce que Claude Code copie chaque dossier de plugin tel quel.
 

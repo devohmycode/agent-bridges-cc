@@ -8,6 +8,8 @@ import { ROOT } from "./helpers.mjs";
 const PLUGINS_DIR = path.join(ROOT, "plugins");
 const MARKETPLACE = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "marketplace.json"), "utf8"));
 const LOCAL_PLUGINS = MARKETPLACE.plugins.filter((entry) => typeof entry.source === "string");
+const HUB = "bridges-hub";
+const BRIDGE_PLUGINS = LOCAL_PLUGINS.filter((entry) => entry.name !== HUB);
 const EXPECTED_COMMANDS = ["check.md", "critique.md", "delegate.md", "review.md", "runs.md", "show.md", "stop.md"];
 
 function listFiles(dir) {
@@ -22,11 +24,12 @@ function frontmatter(source) {
   return match ? match[1] : null;
 }
 
-test("marketplace lists the five generated bridges plus the official codex and grok-build plugins", () => {
+test("marketplace lists the five generated bridges, the hub and the official codex and grok-build plugins", () => {
   assert.deepEqual(
-    LOCAL_PLUGINS.map((entry) => entry.name).sort(),
+    BRIDGE_PLUGINS.map((entry) => entry.name).sort(),
     ["antigravity-bridge", "copilot-bridge", "cursor-bridge", "devin-bridge", "warp-bridge"]
   );
+  assert.ok(LOCAL_PLUGINS.some((entry) => entry.name === HUB), "the hub is listed");
   const external = MARKETPLACE.plugins.filter((entry) => typeof entry.source !== "string");
   assert.deepEqual(external.map((entry) => entry.name).sort(), ["codex", "grok-build"]);
   for (const entry of external) {
@@ -38,7 +41,7 @@ test("marketplace lists the five generated bridges plus the official codex and g
   assert.deepEqual(fs.readdirSync(PLUGINS_DIR).sort(), LOCAL_PLUGINS.map((entry) => entry.name).sort());
 });
 
-for (const entry of LOCAL_PLUGINS) {
+for (const entry of BRIDGE_PLUGINS) {
   const pluginRoot = path.join(ROOT, entry.source);
   const plugin = entry.name;
   const id = plugin.replace(/-bridge$/, "");
@@ -113,3 +116,32 @@ for (const entry of LOCAL_PLUGINS) {
     assert.match(hooks, /session-lifecycle-hook\.mjs/);
   });
 }
+
+test("bridges-hub: manifest, commands, skill, built-ins and hooks are consistent", () => {
+  const pluginRoot = path.join(PLUGINS_DIR, HUB);
+  const read = (rel) => fs.readFileSync(path.join(pluginRoot, rel), "utf8");
+  const entry = LOCAL_PLUGINS.find((item) => item.name === HUB);
+
+  const manifest = JSON.parse(read(".claude-plugin/plugin.json"));
+  assert.equal(manifest.name, HUB);
+  assert.equal(manifest.version, entry.version);
+
+  assert.deepEqual(fs.readdirSync(path.join(pluginRoot, "commands")).sort(), [
+    "ask.md", "check.md", "flow.md", "list.md", "new-profile.md", "new-workflow.md", "runs.md", "show.md", "stop.md"
+  ]);
+  assert.deepEqual(fs.readdirSync(path.join(pluginRoot, "skills")), ["hub-run-output"]);
+  assert.ok(!fs.existsSync(path.join(pluginRoot, "scripts", "lib", "agent.mjs")), "the hub drives no CLI of its own");
+  assert.match(read("scripts/lib/provider.mjs"), /pluginName: "bridges-hub"/);
+
+  for (const file of listFiles(path.join(pluginRoot, "commands"))) {
+    const source = fs.readFileSync(file, "utf8");
+    assert.ok(frontmatter(source), `${path.basename(file)} should start with frontmatter`);
+    assert.match(source, /scripts\/hub\.mjs"/, `${path.basename(file)} routes through hub.mjs`);
+  }
+  assert.match(read("commands/flow.md"), /--dry-run \$ARGUMENTS/);
+  assert.match(read("commands/flow.md"), /run_in_background:\s*true/);
+
+  assert.ok(fs.readdirSync(path.join(pluginRoot, "profiles")).includes("security-review.md"));
+  assert.ok(fs.readdirSync(path.join(pluginRoot, "workflows")).includes("implement-review.md"));
+  assert.match(read("hooks/hooks.json"), /session-lifecycle-hook\.mjs/);
+});

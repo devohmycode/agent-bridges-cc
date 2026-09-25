@@ -1,0 +1,8 @@
+{
+  "name": "bridges-hub",
+  "version": "0.1.0",
+  "description": "Bridges Hub: give a provider a role with profiles, and chain several bridges in multi-provider workflows.",
+  "author": {
+    "name": "DevOhMyCode"
+  }
+}

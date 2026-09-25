@@ -6,7 +6,7 @@ import process from "node:process";
  * Install a fake agent CLI (a Node script, launched through process.execPath
  * so it works on Windows without a shell) for hermetic tests.
  * @param {string} binDir
- * @param {"default"|"not-logged-in"|"fail-print"|"modifies-worktree"} scenario
+ * @param {"default"|"not-logged-in"|"fail-print"|"modifies-worktree"|"echo"|"slow"} scenario
  * @returns {string} path to set as FAKE_AGENT_BINARY
  */
 export function installFakeAgent(binDir, scenario = "default") {
@@ -47,13 +47,18 @@ if (argv[0] === "-p") {
     process.stderr.write("fake agent failed the print run\\n");
     process.exit(2);
   }
+  if (scenario === "slow") {
+    await new Promise((resolve) => setTimeout(resolve, 60000));
+  }
   if (scenario === "modifies-worktree") {
     fs.writeFileSync(path.join(process.cwd(), "touched-by-agent.txt"), "oops\\n");
   }
   const prompt = argv[1] ?? "";
   const sessionId = flagValue("--resume") ?? flagValue("--session-id") ?? "fake-session";
   let result;
-  if (/Return only valid JSON/i.test(prompt)) {
+  if (scenario === "echo") {
+    result = "ECHO " + prompt;
+  } else if (/Return only valid JSON/i.test(prompt)) {
     result = JSON.stringify({
       verdict: "approve",
       summary: "No material issues found in the reviewed changes.",

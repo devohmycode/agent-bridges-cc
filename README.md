@@ -59,6 +59,69 @@ Every plugin exposes the same commands under its own prefix
 Common options: `--wait` / `--background`, `--model <model>`, and
 `--effort <level>` where the CLI supports it.
 
+## Profiles and workflows (`bridges-hub`)
+
+The `bridges-hub` plugin drives the bridges you installed:
+
+- a **profile** gives a provider's agent a role (security review,
+  architecture critic, test writer…);
+- a **workflow** chains several providers on one task, for example Cursor
+  implements, Codex and Grok Build review in parallel, then Cursor applies
+  the fixes.
+
+```text
+/plugin install bridges-hub@agent-bridges
+/bridges-hub:check                                   # which bridges it can use
+/bridges-hub:list                                    # profiles and workflows
+/bridges-hub:ask codex --profile security-review audit the login flow
+/bridges-hub:flow implement-review add a --verbose flag to the build
+/bridges-hub:flow --dry-run multi-review             # preview, runs nothing
+```
+
+`runs`, `show` and `stop` work as in the bridges. Each step runs through the
+provider plugin's own script (`run`/`task --json`), so the step also shows up
+in that bridge's `runs`. Read steps run side by side; a `write` step always
+runs alone, since every step shares one working tree.
+
+Built-ins: profiles `security-review`, `performance-review`,
+`architecture-critic`, `test-writer`, `implementer`, `docs-writer`; workflows
+`implement-review`, `multi-review`, `security-audit`.
+
+Custom files are Markdown with a flat frontmatter. A project file overrides a
+user file, which overrides a built-in of the same name:
+
+| Layer | Location |
+| --- | --- |
+| project | `.claude/bridges-hub/{profiles,workflows}/*.md` |
+| user | `~/.claude/bridges-hub/{profiles,workflows}/*.md` |
+| built-in | `plugins/bridges-hub/{profiles,workflows}/` |
+
+```markdown
+---
+name: review-then-fix
+description: Codex reviews, Cursor fixes
+---
+## review
+provider: codex
+profile: security-review
+
+Review the uncommitted changes for: {{task}}
+
+## fix
+provider: cursor
+mode: write
+after: review
+
+Fix what is real in this review: {{steps.review.output}}
+```
+
+Step keys: `provider`, `profile`, `mode` (`read`/`write`), `model`, `effort`,
+`after`, `on_failure` (`stop`/`continue`). Placeholders: `{{task}}`,
+`{{vars.<name>}}` (`--var name=value`), `{{steps.<id>.output}}` and
+`{{steps.<id>.status}}`. `/bridges-hub:new-profile` and
+`/bridges-hub:new-workflow` write and validate a file for you;
+`validate [name|file]` checks one by hand.
+
 ## How each CLI is driven
 
 | | Read-only (review, critique) | Write (delegate) | Resume | `--effort` |
@@ -119,6 +182,8 @@ npm test
 - `core/`: shared runtime (bridge, run tracking, git, rendering, hooks).
 - `providers/<id>.mjs`: one adapter per CLI (see `providers/README.md`).
 - `templates/`: commands, agent and skills, with `{{…}}` variables.
+- `hub/`: the `bridges-hub` plugin (runner, profiles, workflows, commands); the
+  build adds the core libraries it reuses.
 - `plugins/`: **generated**, do not edit by hand; it is committed because
   Claude Code copies each plugin directory as is.
 

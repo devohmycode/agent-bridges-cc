@@ -78,6 +78,15 @@
         "name": "DevOhMyCode"
       },
       "source": "./plugins/warp-bridge"
+    },
+    {
+      "name": "bridges-hub",
+      "description": "Bridges Hub: give a provider a role with profiles, and chain several bridges in multi-provider workflows.",
+      "version": "0.1.0",
+      "author": {
+        "name": "DevOhMyCode"
+      },
+      "source": "./plugins/bridges-hub"
     }
   ]
 }

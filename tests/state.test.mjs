@@ -10,37 +10,55 @@ import {
   resolveJobFile,
   resolveJobLogFile,
   resolveStateDir,
+  resolvePluginDataDir,
   resolveStateFile,
   saveState
-} from "../plugins/grok-build/scripts/lib/state.mjs";
+} from "./.generated/plugins/fake-bridge/scripts/lib/state.mjs";
 
-test("resolveStateDir uses a temp-backed per-workspace directory", () => {
-  const workspace = makeTempDir();
-  const stateDir = resolveStateDir(workspace);
-
-  assert.equal(stateDir.startsWith(os.tmpdir()), true);
-  assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
-  assert.match(stateDir, /grok-cc-runs/);
-});
-
-test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
-  const workspace = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
-
+function withEnv(vars, fn) {
+  const previous = Object.fromEntries(Object.keys(vars).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(vars)) {
+    if (value == null) delete process.env[key];
+    else process.env[key] = value;
+  }
   try {
-    const stateDir = resolveStateDir(workspace);
-
-    assert.equal(stateDir.startsWith(path.join(pluginDataDir, "state")), true);
-    assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
+    return fn();
   } finally {
-    if (previousPluginDataDir == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
     }
   }
+}
+
+test("resolveStateDir uses a temp-backed per-plugin, per-workspace directory", () => {
+  withEnv({ AGENT_BRIDGES_DATA_FAKE: null, CLAUDE_PLUGIN_DATA: null }, () => {
+    const stateDir = resolveStateDir(makeTempDir());
+    assert.equal(stateDir.startsWith(os.tmpdir()), true);
+    assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
+    assert.match(stateDir, /fake-bridge-runs/);
+  });
+});
+
+test("resolveStateDir honors the plugin-specific data variable", () => {
+  const pluginDataDir = makeTempDir();
+  withEnv({ AGENT_BRIDGES_DATA_FAKE: pluginDataDir, CLAUDE_PLUGIN_DATA: null }, () => {
+    const stateDir = resolveStateDir(makeTempDir());
+    assert.equal(stateDir.startsWith(path.join(pluginDataDir, "state")), true);
+    assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
+  });
+});
+
+test("resolvePluginDataDir ignores another plugin's CLAUDE_PLUGIN_DATA", () => {
+  const base = makeTempDir();
+  const other = path.join(base, "cursor-bridge-agent-bridges");
+  const own = path.join(base, "fake-bridge-agent-bridges");
+  assert.equal(resolvePluginDataDir({ CLAUDE_PLUGIN_DATA: other }), null);
+  assert.equal(resolvePluginDataDir({ CLAUDE_PLUGIN_DATA: own }), own);
+  assert.equal(resolvePluginDataDir({ CLAUDE_PLUGIN_DATA: other, AGENT_BRIDGES_DATA_FAKE: own }), own);
+  withEnv({ AGENT_BRIDGES_DATA_FAKE: null, CLAUDE_PLUGIN_DATA: other }, () => {
+    assert.doesNotMatch(resolveStateDir(makeTempDir()), /cursor-bridge/);
+  });
 });
 
 test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", () => {

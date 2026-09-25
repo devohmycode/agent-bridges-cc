@@ -1,14 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { runCommand, terminateProcessTree } from "../plugins/grok-build/scripts/lib/process.mjs";
+import { runCommand, terminateProcessTree } from "./.generated/plugins/fake-bridge/scripts/lib/process.mjs";
 
 test("terminateProcessTree uses taskkill on Windows", () => {
   let captured = null;
   const outcome = terminateProcessTree(1234, {
     platform: "win32",
-    runCommandImpl(command, args) {
-      captured = { command, args };
+    runCommandImpl(command, args, options) {
+      captured = { command, args, shell: options?.shell };
       return {
         command,
         args,
@@ -26,7 +26,9 @@ test("terminateProcessTree uses taskkill on Windows", () => {
 
   assert.deepEqual(captured, {
     command: "taskkill",
-    args: ["/PID", "1234", "/T", "/F"]
+    args: ["/PID", "1234", "/T", "/F"],
+    // Never through a shell: Git Bash (SHELL set) would rewrite "/PID" into a path.
+    shell: false
   });
   assert.equal(outcome.delivered, true);
   assert.equal(outcome.method, "taskkill");

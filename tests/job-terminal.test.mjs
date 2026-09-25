@@ -10,19 +10,19 @@ import {
   resolveJobFile,
   upsertJob,
   writeJobFile
-} from "../plugins/grok-build/scripts/lib/state.mjs";
-import { resolveJobKillTargets } from "../plugins/grok-build/scripts/lib/tracked-jobs.mjs";
+} from "./.generated/plugins/fake-bridge/scripts/lib/state.mjs";
+import { resolveJobKillTargets } from "./.generated/plugins/fake-bridge/scripts/lib/tracked-jobs.mjs";
 
 function withPluginData(fn) {
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = makeTempDir();
+  const previous = process.env.AGENT_BRIDGES_DATA_FAKE;
+  process.env.AGENT_BRIDGES_DATA_FAKE = makeTempDir();
   try {
     return fn();
   } finally {
     if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
+      delete process.env.AGENT_BRIDGES_DATA_FAKE;
     } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
+      process.env.AGENT_BRIDGES_DATA_FAKE = previous;
     }
   }
 }

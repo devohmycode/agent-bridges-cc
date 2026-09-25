@@ -3,273 +3,242 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 
-import { buildEnv, installFakeGrok } from "./fake-grok-fixture.mjs";
-import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
+import { buildEnv, installFakeAgent, lastPrintArgv } from "./fake-agent-fixture.mjs";
+import {
+  FAKE_DATA_ENV,
+  FAKE_SESSION_ENV,
+  initGitRepo,
+  makeTempDir,
+  ROOT,
+  run,
+  runBridge,
+  withPluginData
+} from "./helpers.mjs";
 import {
   generateJobId,
   listJobs,
   resolveStateDir,
   upsertJob,
   writeJobFile
-} from "../plugins/grok-build/scripts/lib/state.mjs";
+} from "./.generated/plugins/fake-bridge/scripts/lib/state.mjs";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PLUGIN_ROOT = path.join(ROOT, "plugins", "grok-build");
-const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "grok-bridge.mjs");
-
-function pluginDataEnv(pluginDataDir, binDir, extra = {}) {
-  return buildEnv(binDir, {
-    CLAUDE_PLUGIN_DATA: pluginDataDir,
-    ...extra
-  });
+function setup(scenario = "default") {
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  const fakeBinary = installFakeAgent(binDir, scenario);
+  const log = path.join(pluginDataDir, "fake-agent.log");
+  const env = (extra = {}) => buildEnv(fakeBinary, { [FAKE_DATA_ENV]: pluginDataDir, FAKE_AGENT_LOG: log, ...extra });
+  return { pluginDataDir, log, env };
 }
 
-test("check reports ready when fake grok is installed and authenticated", () => {
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  installFakeGrok(binDir);
-
-  const result = run("node", [SCRIPT, "check", "--json"], {
-    cwd: ROOT,
-    env: pluginDataEnv(pluginDataDir, binDir)
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.ready, true);
-  assert.equal(payload.grok.available, true);
-  assert.equal(payload.auth.loggedIn, true);
-  assert.equal(payload.sessionRuntime.mode, "plugin-owned");
-  assert.equal(payload.reviewGateEnabled, undefined);
-});
-
-test("check reports not ready when models probe fails", () => {
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  installFakeGrok(binDir, "not-logged-in");
-
-  const result = run("node", [SCRIPT, "check", "--json"], {
-    cwd: ROOT,
-    env: pluginDataEnv(pluginDataDir, binDir)
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.ready, false);
-  assert.equal(payload.auth.loggedIn, false);
-  assert.ok(payload.nextSteps.length > 0);
-});
-
-test("check ignores legacy review-gate flags as unknown options", () => {
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  installFakeGrok(binDir);
-
-  const result = run("node", [SCRIPT, "check", "--enable-review-gate", "--json"], {
-    cwd: ROOT,
-    env: pluginDataEnv(pluginDataDir, binDir)
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.ready, true);
-  assert.equal(payload.reviewGateEnabled, undefined);
-  assert.match(result.stderr, /ignoring unknown option/);
-});
-
-test("review renders a no-findings style result from fake grok", () => {
+function reviewableRepo() {
   const repo = makeTempDir();
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  installFakeGrok(binDir);
-  initGitRepo(repo);
-  fs.mkdirSync(path.join(repo, "src"));
-  fs.writeFileSync(path.join(repo, "src", "app.js"), "export const value = 1;\n");
-  run("git", ["add", "src/app.js"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-  fs.writeFileSync(path.join(repo, "src", "app.js"), "export const value = 2;\n");
-
-  const result = run("node", [SCRIPT, "review"], {
-    cwd: repo,
-    env: pluginDataEnv(pluginDataDir, binDir)
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Reviewed uncommitted changes|No material issues found/i);
-  assert.match(result.stdout, /Grok Build Review|Target:/);
-});
-
-test("critique returns structured findings payload path", () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  installFakeGrok(binDir);
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-  fs.writeFileSync(path.join(repo, "README.md"), "hello world\n");
-
-  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
-    cwd: repo,
-    env: pluginDataEnv(pluginDataDir, binDir)
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.review, "Critique");
-  assert.equal(payload.result?.verdict, "approve");
-  assert.ok(Array.isArray(payload.result?.findings));
-});
-
-function setupReviewableRepo() {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  const fakeGrokLog = path.join(pluginDataDir, "fake-grok.log");
-  installFakeGrok(binDir);
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "src.js"), "export const value = 1;\n");
   run("git", ["add", "src.js"], { cwd: repo });
   run("git", ["commit", "-m", "init"], { cwd: repo });
   fs.writeFileSync(path.join(repo, "src.js"), "export const value = 2;\n");
-  return { repo, binDir, pluginDataDir, fakeGrokLog };
+  return repo;
 }
 
-function lastFakeGrokArgv(logPath) {
-  const lines = fs
-    .readFileSync(logPath, "utf8")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  const printRun = [...lines].reverse().find((entry) => entry.argv?.includes("-p"));
-  assert.ok(printRun, "expected a headless grok -p invocation");
-  return printRun.argv;
+function committedRepo() {
+  const repo = makeTempDir();
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
+  run("git", ["add", "a.txt"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+  return repo;
 }
 
-test("review forwards --model and --effort to grok", () => {
-  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo();
-
-  const result = run(
-    "node",
-    [SCRIPT, "review", "--model", "grok-build", "--effort", "high"],
-    {
-      cwd: repo,
-      env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
-    }
-  );
+test("check reports ready when the fake agent is installed and authenticated", () => {
+  const { env } = setup();
+  const result = runBridge(["check", "--json"], { cwd: ROOT, env: env() });
 
   assert.equal(result.status, 0, result.stderr);
-  const argv = lastFakeGrokArgv(fakeGrokLog);
-  assert.ok(argv.includes("--model"));
-  assert.equal(argv[argv.indexOf("--model") + 1], "grok-build");
-  assert.ok(argv.includes("--effort"));
-  assert.equal(argv[argv.indexOf("--effort") + 1], "high");
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, true);
+  assert.equal(payload.provider, "fake");
+  assert.equal(payload.cli.available, true);
+  assert.equal(payload.auth.loggedIn, true);
+  assert.equal(payload.readOnly.enforced, true);
+  assert.equal(payload.sessionRuntime.mode, "plugin-owned");
 });
 
-test("critique forwards --model and --effort to grok", () => {
-  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo();
-
-  const result = run(
-    "node",
-    [SCRIPT, "critique", "--model", "grok-build", "--effort", "medium", "focus on race conditions"],
-    {
-      cwd: repo,
-      env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
-    }
-  );
+test("check reports not ready when the auth probe fails", () => {
+  const { env } = setup("not-logged-in");
+  const result = runBridge(["check", "--json"], { cwd: ROOT, env: env() });
 
   assert.equal(result.status, 0, result.stderr);
-  const argv = lastFakeGrokArgv(fakeGrokLog);
-  assert.ok(argv.includes("--model"));
-  assert.equal(argv[argv.indexOf("--model") + 1], "grok-build");
-  assert.ok(argv.includes("--effort"));
-  assert.equal(argv[argv.indexOf("--effort") + 1], "medium");
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, false);
+  assert.equal(payload.auth.loggedIn, false);
+  assert.ok(payload.nextSteps.includes("Run `fake-agent login`."));
 });
 
-test("review rejects unsupported --effort values", () => {
-  const { repo, binDir, pluginDataDir } = setupReviewableRepo();
+test("check reports the CLI as unavailable when the binary is missing", () => {
+  const { env } = setup();
+  const result = runBridge(["check", "--json"], {
+    cwd: ROOT,
+    env: env({ FAKE_AGENT_BINARY: path.join(makeTempDir(), "missing-agent") })
+  });
 
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, false);
+  assert.equal(payload.cli.available, false);
+  assert.ok(payload.nextSteps.includes("Install the fake agent."));
+});
+
+test("review renders the fake agent's answer under the provider title", () => {
+  const { env } = setup();
+  const repo = reviewableRepo();
+  const result = runBridge(["review"], { cwd: repo, env: env() });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^# Fake Agent Review/m);
+  assert.match(result.stdout, /Target: /);
+  assert.match(result.stdout, /No material issues found/);
+  assert.doesNotMatch(result.stdout, /WARNING/);
+});
+
+test("critique returns a structured findings payload", () => {
+  const { env } = setup();
+  const repo = reviewableRepo();
+  const result = runBridge(["critique", "--json", "focus on docs"], { cwd: repo, env: env() });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.review, "Critique");
+  assert.equal(payload.agent.provider, "fake");
+  assert.equal(payload.result?.verdict, "approve");
+  assert.ok(Array.isArray(payload.result?.findings));
+});
+
+test("review and critique forward --model and --effort, read-only", () => {
+  for (const [command, effort] of [
+    ["review", "high"],
+    ["critique", "medium"]
+  ]) {
+    const { env, log } = setup();
+    const repo = reviewableRepo();
+    const result = runBridge([command, "--model", "fake-model", "--effort", effort, "focus"], { cwd: repo, env: env() });
+
+    assert.equal(result.status, 0, result.stderr);
+    const argv = lastPrintArgv(log);
+    assert.equal(argv[argv.indexOf("--model") + 1], "fake-model");
+    assert.equal(argv[argv.indexOf("--effort") + 1], effort);
+    assert.ok(argv.includes("--read-only"), argv.join(" "));
+  }
+});
+
+test("review rejects effort values the provider does not list", () => {
+  const { env } = setup();
+  const repo = reviewableRepo();
   for (const effort of ["extreme", "xhigh", "max"]) {
-    const result = run("node", [SCRIPT, "review", "--effort", effort], {
-      cwd: repo,
-      env: pluginDataEnv(pluginDataDir, binDir)
-    });
-
+    const result = runBridge(["review", "--effort", effort], { cwd: repo, env: env() });
     assert.notEqual(result.status, 0, `expected rejection for --effort ${effort}`);
     assert.match(`${result.stdout}\n${result.stderr}`, /Unsupported reasoning effort/i);
   }
 });
 
-test("run delegates through fake grok and stores a finished job", () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  installFakeGrok(binDir);
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
-  run("git", ["add", "README.md"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
+test("run is read-only by default and write-capable with --write", () => {
+  const readOnly = setup();
+  const repo = committedRepo();
+  const first = runBridge(["run", "check auth preflight"], { cwd: repo, env: readOnly.env() });
+  assert.equal(first.status, 0, first.stderr);
+  assert.ok(lastPrintArgv(readOnly.log).includes("--read-only"));
 
-  const result = run("node", [SCRIPT, "run", "check auth preflight"], {
-    cwd: repo,
-    env: pluginDataEnv(pluginDataDir, binDir)
-  });
+  const writable = setup();
+  const second = runBridge(["run", "--write", "make the change"], { cwd: repo, env: writable.env() });
+  assert.equal(second.status, 0, second.stderr);
+  assert.ok(!lastPrintArgv(writable.log).includes("--read-only"));
+});
+
+test("read-only runs warn when the agent changes the working tree", () => {
+  const { env } = setup("modifies-worktree");
+  const repo = reviewableRepo();
+  const result = runBridge(["review"], { cwd: repo, env: env() });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /WARNING: Fake changed the working tree during a read-only run:/);
+  assert.match(result.stdout, /touched-by-agent\.txt/);
+});
+
+test("write runs do not trigger the read-only working-tree warning", () => {
+  const { env } = setup("modifies-worktree");
+  const repo = committedRepo();
+  const result = runBridge(["run", "--write", "touch something"], { cwd: repo, env: env() });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /WARNING/);
+});
+
+test("run surfaces agent failures with a non-zero exit", () => {
+  const { env } = setup("fail-print");
+  const repo = committedRepo();
+  const result = runBridge(["run", "do it"], { cwd: repo, env: env() });
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /fake agent failed the print run/);
+});
+
+test("run delegates through the fake agent and stores a finished job", () => {
+  const { env, pluginDataDir } = setup();
+  const repo = committedRepo();
+  const result = runBridge(["run", "check auth preflight"], { cwd: repo, env: env() });
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Handled the requested task/);
 
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
-  try {
+  withPluginData(pluginDataDir, () => {
     const jobs = listJobs(repo);
     assert.ok(jobs.length >= 1);
     assert.equal(jobs[0].jobClass, "task");
     assert.equal(jobs[0].status, "completed");
-  } finally {
-    if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
-    }
-  }
+    assert.ok(jobs[0].threadId, "the session id assigned by the provider should be stored");
+  });
 });
 
-test("runs and show surface the latest finished run", () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  installFakeGrok(binDir);
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
-  run("git", ["add", "a.txt"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
-  const task = run("node", [SCRIPT, "run", "--json", "do a small thing"], {
-    cwd: repo,
-    env: pluginDataEnv(pluginDataDir, binDir)
-  });
+test("runs and show surface the latest finished run with the resume command", () => {
+  const { env } = setup();
+  const repo = committedRepo();
+  const task = runBridge(["run", "--json", "do a small thing"], { cwd: repo, env: env() });
   assert.equal(task.status, 0, task.stderr);
+  const threadId = JSON.parse(task.stdout).threadId;
+  assert.ok(threadId);
 
-  const status = run("node", [SCRIPT, "runs", "--json"], {
-    cwd: repo,
-    env: pluginDataEnv(pluginDataDir, binDir)
-  });
+  const status = runBridge(["runs", "--json"], { cwd: repo, env: env() });
   assert.equal(status.status, 0, status.stderr);
   const statusPayload = JSON.parse(status.stdout);
-  assert.ok(statusPayload.latestFinished);
-  assert.equal(statusPayload.latestFinished.status, "completed");
-  assert.equal(statusPayload.needsReview, undefined);
+  assert.equal(statusPayload.latestFinished?.status, "completed");
 
-  const result = run("node", [SCRIPT, "show"], {
-    cwd: repo,
-    env: pluginDataEnv(pluginDataDir, binDir)
-  });
+  const result = runBridge(["show"], { cwd: repo, env: env() });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Handled the requested task|Grok session ID|Run:/);
+  assert.match(result.stdout, /Handled the requested task/);
+  assert.match(result.stdout, new RegExp(`Fake session ID: ${threadId}`));
+  assert.match(result.stdout, new RegExp(`Resume in Fake: fake-agent --resume ${threadId}`));
+});
+
+test("--resume-last continues the stored provider session", () => {
+  const { env, log } = setup();
+  const repo = committedRepo();
+  const sessionEnv = { [FAKE_SESSION_ENV]: "claude-session-1" };
+
+  const first = runBridge(["run", "--json", "first task"], { cwd: repo, env: env(sessionEnv) });
+  assert.equal(first.status, 0, first.stderr);
+  const threadId = JSON.parse(first.stdout).threadId;
+
+  const candidate = runBridge(["run-resume-candidate", "--json"], { cwd: repo, env: env(sessionEnv) });
+  assert.equal(candidate.status, 0, candidate.stderr);
+  const payload = JSON.parse(candidate.stdout);
+  assert.equal(payload.available, true);
+  assert.equal(payload.candidate?.threadId, threadId);
+
+  const resumed = runBridge(["run", "--resume-last", "keep going"], { cwd: repo, env: env(sessionEnv) });
+  assert.equal(resumed.status, 0, resumed.stderr);
+  const argv = lastPrintArgv(log);
+  assert.equal(argv[argv.indexOf("--resume") + 1], threadId);
 });
 
 function processAlive(pid) {
@@ -278,73 +247,69 @@ function processAlive(pid) {
   } catch (error) {
     return error?.code !== "ESRCH";
   }
+  if (process.platform === "win32") {
+    return true;
+  }
   // Zombies still accept kill(0); treat them as not running.
   const ps = run("ps", ["-p", String(pid), "-o", "stat="]);
   const stat = String(ps.stdout ?? "").trim().toUpperCase();
-  if (!stat || stat.includes("Z")) {
-    return false;
-  }
-  return true;
+  return Boolean(stat) && !stat.includes("Z");
 }
 
-test("stop terminates a tracked sleeper process and marks run cancelled", () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  installFakeGrok(binDir);
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
-  run("git", ["add", "a.txt"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
+async function waitUntilDead(pid, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (processAlive(pid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !processAlive(pid);
+}
 
-  const agent = spawn(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], {
-    cwd: repo,
-    stdio: "ignore",
-    detached: true
-  });
-  agent.unref();
-  const bridge = spawn(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], {
-    cwd: repo,
-    stdio: "ignore",
-    detached: true
-  });
-  bridge.unref();
-  const agentPid = agent.pid;
-  const bridgePid = bridge.pid;
+test("stop terminates a tracked sleeper process and marks the run cancelled", async () => {
+  const { env, pluginDataDir } = setup();
+  const repo = committedRepo();
 
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
-  try {
-    const jobId = generateJobId("run");
-    const jobsDir = path.join(resolveStateDir(repo), "jobs");
-    fs.mkdirSync(jobsDir, { recursive: true });
-    const logFile = path.join(jobsDir, `${jobId}.log`);
-    fs.writeFileSync(logFile, "", "utf8");
-    const job = {
-      id: jobId,
-      kind: "task",
-      kindLabel: "delegate",
-      title: "Grok Build Delegate",
-      workspaceRoot: repo,
-      jobClass: "task",
-      summary: "fake running",
-      status: "running",
-      phase: "running",
-      bridgePid,
-      pid: bridgePid,
-      agentPid,
-      logFile,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    writeJobFile(repo, jobId, job);
-    upsertJob(repo, job);
-
-    const result = run("node", [SCRIPT, "stop", jobId, "--json"], {
+  const sleeper = () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], {
       cwd: repo,
-      env: pluginDataEnv(pluginDataDir, binDir)
+      stdio: "ignore",
+      detached: true
+    });
+    child.unref();
+    return child.pid;
+  };
+  const agentPid = sleeper();
+  const bridgePid = sleeper();
+
+  try {
+    const jobId = withPluginData(pluginDataDir, () => {
+      const id = generateJobId("run");
+      const jobsDir = path.join(resolveStateDir(repo), "jobs");
+      fs.mkdirSync(jobsDir, { recursive: true });
+      const logFile = path.join(jobsDir, `${id}.log`);
+      fs.writeFileSync(logFile, "", "utf8");
+      const job = {
+        id,
+        kind: "task",
+        kindLabel: "delegate",
+        title: "Fake Agent Delegate",
+        workspaceRoot: repo,
+        jobClass: "task",
+        summary: "fake running",
+        status: "running",
+        phase: "running",
+        bridgePid,
+        pid: bridgePid,
+        agentPid,
+        logFile,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      writeJobFile(repo, id, job);
+      upsertJob(repo, job);
+      return id;
     });
 
+    const result = runBridge(["stop", jobId, "--json"], { cwd: repo, env: env() });
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.status, "cancelled");
@@ -353,47 +318,35 @@ test("stop terminates a tracked sleeper process and marks run cancelled", () => 
     assert.ok(payload.killTargets?.includes(agentPid));
     assert.ok(payload.killTargets?.includes(bridgePid));
 
-    const jobs = listJobs(repo);
-    const cancelled = jobs.find((entry) => entry.id === jobId);
-    assert.equal(cancelled?.status, "cancelled");
+    withPluginData(pluginDataDir, () => {
+      assert.equal(listJobs(repo).find((entry) => entry.id === jobId)?.status, "cancelled");
+    });
 
-    // Both process trees must actually be dead.
-    assert.equal(processAlive(agentPid), false);
-    assert.equal(processAlive(bridgePid), false);
+    assert.equal(await waitUntilDead(agentPid), true);
+    assert.equal(await waitUntilDead(bridgePid), true);
   } finally {
-    if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
-    }
     for (const pid of [agentPid, bridgePid]) {
       try {
-        process.kill(-pid, "SIGKILL");
+        process.kill(pid, "SIGKILL");
       } catch {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // already dead
-        }
+        // already dead
       }
     }
   }
 });
 
 test("enqueueBackgroundJob writes the job file before spawning the worker", async () => {
-  const { enqueueBackgroundJob } = await import("../plugins/grok-build/scripts/grok-bridge.mjs");
+  const { enqueueBackgroundJob } = await import("./.generated/plugins/fake-bridge/scripts/bridge.mjs");
   const repo = makeTempDir();
   const pluginDataDir = makeTempDir();
-  const previous = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
 
-  try {
+  await withPluginData(pluginDataDir, async () => {
     const events = [];
     const job = {
       id: generateJobId("run"),
       kind: "task",
       kindLabel: "delegate",
-      title: "Grok Build Delegate",
+      title: "Fake Agent Delegate",
       workspaceRoot: repo,
       jobClass: "task",
       summary: "bg order",
@@ -421,79 +374,27 @@ test("enqueueBackgroundJob writes the job file before spawning the worker", asyn
     assert.equal(result.payload.status, "queued");
     assert.equal(result.payload.pid, 424242);
     assert.equal(result.payload.bridgePid, 424242);
-    const jobs = listJobs(repo);
-    assert.equal(jobs[0].pid, 424242);
-  } finally {
-    if (previous == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previous;
-    }
-  }
+    assert.equal(listJobs(repo)[0].pid, 424242);
+  });
+});
+
+test("a background run completes through the detached worker", async () => {
+  const { env } = setup();
+  const repo = committedRepo();
+  const queued = runBridge(["run", "--background", "--json", "background task"], { cwd: repo, env: env() });
+  assert.equal(queued.status, 0, queued.stderr);
+  const { jobId } = JSON.parse(queued.stdout);
+
+  const waited = runBridge(["runs", jobId, "--wait", "--timeout-ms", "30000", "--json"], { cwd: repo, env: env() });
+  assert.equal(waited.status, 0, waited.stderr);
+  const snapshot = JSON.parse(waited.stdout);
+  assert.equal(snapshot.job.status, "completed");
+
+  const shown = runBridge(["show", jobId], { cwd: repo, env: env() });
+  assert.match(shown.stdout, /Handled the requested task/);
 });
 
 function readStoredJobFromDisk(workspaceRoot, jobId) {
   const jobFile = path.join(resolveStateDir(workspaceRoot), "jobs", `${jobId}.json`);
-  if (!fs.existsSync(jobFile)) {
-    return null;
-  }
-  return JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  return fs.existsSync(jobFile) ? JSON.parse(fs.readFileSync(jobFile, "utf8")) : null;
 }
-
-test("import uses grok import and prints resume hint", () => {
-  const home = makeTempDir();
-  const projects = path.join(home, ".claude", "projects", "demo");
-  fs.mkdirSync(projects, { recursive: true });
-  const sessionPath = path.join(projects, "sess-transfer.jsonl");
-  fs.writeFileSync(sessionPath, '{"type":"user","text":"hi"}\n', "utf8");
-
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  installFakeGrok(binDir);
-  initGitRepo(repo);
-
-  const result = run("node", [SCRIPT, "import", "--source", sessionPath, "--json"], {
-    cwd: repo,
-    env: pluginDataEnv(pluginDataDir, binDir, {
-      HOME: home,
-      USERPROFILE: home
-    })
-  });
-
-  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.threadId, "11111111-2222-4333-8444-555555555555");
-  assert.equal(payload.resumeCommand, "grok -r 11111111-2222-4333-8444-555555555555");
-});
-
-test("run-resume-candidate reports available after a completed run with thread id", () => {
-  const repo = makeTempDir();
-  const binDir = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  installFakeGrok(binDir);
-  initGitRepo(repo);
-  fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
-  run("git", ["add", "a.txt"], { cwd: repo });
-  run("git", ["commit", "-m", "init"], { cwd: repo });
-
-  const sessionId = "claude-session-1";
-  const task = run("node", [SCRIPT, "run", "first task"], {
-    cwd: repo,
-    env: pluginDataEnv(pluginDataDir, binDir, {
-      GROK_CC_SESSION_ID: sessionId
-    })
-  });
-  assert.equal(task.status, 0, task.stderr);
-
-  const candidate = run("node", [SCRIPT, "run-resume-candidate", "--json"], {
-    cwd: repo,
-    env: pluginDataEnv(pluginDataDir, binDir, {
-      GROK_CC_SESSION_ID: sessionId
-    })
-  });
-  assert.equal(candidate.status, 0, candidate.stderr);
-  const payload = JSON.parse(candidate.stdout);
-  assert.equal(payload.available, true);
-  assert.ok(payload.candidate?.threadId);
-});

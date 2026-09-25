@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { renderReviewResult, renderStoredJobResult } from "../plugins/grok-build/scripts/lib/render.mjs";
+import { renderReviewResult, renderStoredJobResult } from "./.generated/plugins/fake-bridge/scripts/lib/render.mjs";
 
 test("renderReviewResult degrades gracefully when JSON is missing required review fields", () => {
   const output = renderReviewResult(
@@ -22,7 +22,7 @@ test("renderReviewResult degrades gracefully when JSON is missing required revie
     }
   );
 
-  assert.match(output, /Grok returned JSON with an unexpected review shape\./);
+  assert.match(output, /Fake returned JSON with an unexpected review shape\./);
   assert.match(output, /Missing array `findings`\./);
   assert.match(output, /Raw final message:/);
 });
@@ -32,13 +32,13 @@ test("renderStoredJobResult prefers rendered output for structured review jobs",
     {
       id: "review-123",
       status: "completed",
-      title: "Grok Build Critique",
+      title: "Fake Agent Critique",
       jobClass: "review",
       threadId: "thr_123"
     },
     {
       threadId: "thr_123",
-      rendered: "# Grok Build Critique\n\nTarget: working tree diff\nVerdict: needs-attention\n",
+      rendered: "# Fake Agent Critique\n\nTarget: working tree diff\nVerdict: needs-attention\n",
       result: {
         result: {
           verdict: "needs-attention",
@@ -52,8 +52,8 @@ test("renderStoredJobResult prefers rendered output for structured review jobs",
     }
   );
 
-  assert.match(output, /^# Grok Build Critique/);
+  assert.match(output, /^# Fake Agent Critique/);
   assert.doesNotMatch(output, /^\{/);
-  assert.match(output, /Grok session ID: thr_123/);
-  assert.match(output, /Resume in Grok: grok -r thr_123/);
+  assert.match(output, /Fake session ID: thr_123/);
+  assert.match(output, /Resume in Fake: fake-agent --resume thr_123/);
 });

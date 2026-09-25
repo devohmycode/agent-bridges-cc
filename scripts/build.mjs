@@ -29,14 +29,14 @@ const EXTERNAL_PLUGINS = [
     description: "Official OpenAI Codex plugin: review, adversarial review, rescue delegation and session transfer through the Codex app server.",
     author: { name: "OpenAI" },
     homepage: "https://github.com/openai/codex-plugin-cc",
-    source: { source: "git-subdir", url: "openai/codex-plugin-cc", path: "plugins/codex" }
+    source: { source: "git-subdir", url: "https://github.com/openai/codex-plugin-cc.git", path: "plugins/codex" }
   },
   {
     name: "grok-build",
     description: "Official xAI Grok Build plugin: review, critique, delegation and Claude session import through the grok CLI.",
     author: { name: "xAI" },
     homepage: "https://github.com/xai-org/grok-build-plugin-cc",
-    source: { source: "git-subdir", url: "xai-org/grok-build-plugin-cc", path: "plugins/grok-build" }
+    source: { source: "git-subdir", url: "https://github.com/xai-org/grok-build-plugin-cc.git", path: "plugins/grok-build" }
   }
 ];
 

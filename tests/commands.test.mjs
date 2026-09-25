@@ -31,6 +31,8 @@ test("marketplace lists the five generated bridges plus the official codex and g
   assert.deepEqual(external.map((entry) => entry.name).sort(), ["codex", "grok-build"]);
   for (const entry of external) {
     assert.equal(entry.source.source, "git-subdir");
+    // The owner/repo shorthand is cloned over SSH and fails without a known GitHub host key.
+    assert.match(entry.source.url, /^https:\/\/github\.com\//, `${entry.name} must use an HTTPS clone URL`);
     assert.equal(entry.version, undefined, `${entry.name} should track upstream, not pin a version`);
   }
   assert.deepEqual(fs.readdirSync(PLUGINS_DIR).sort(), LOCAL_PLUGINS.map((entry) => entry.name).sort());

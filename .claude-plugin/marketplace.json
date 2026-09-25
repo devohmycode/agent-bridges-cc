@@ -17,7 +17,7 @@
       "homepage": "https://github.com/openai/codex-plugin-cc",
       "source": {
         "source": "git-subdir",
-        "url": "openai/codex-plugin-cc",
+        "url": "https://github.com/openai/codex-plugin-cc.git",
         "path": "plugins/codex"
       }
     },
@@ -30,7 +30,7 @@
       "homepage": "https://github.com/xai-org/grok-build-plugin-cc",
       "source": {
         "source": "git-subdir",
-        "url": "xai-org/grok-build-plugin-cc",
+        "url": "https://github.com/xai-org/grok-build-plugin-cc.git",
         "path": "plugins/grok-build"
       }
     },

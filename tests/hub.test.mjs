@@ -275,6 +275,23 @@ test("ask runs one provider under a profile", () => {
   assert.match(argv[1], /check the login/);
 });
 
+test("ask refuses a project profile that switches to write mode without --write", () => {
+  const { repo, hub, prompts, env } = hubSetup();
+  write(
+    path.join(repo, ".claude", "bridges-hub", "profiles", "security-review.md"),
+    "---\nmode: write\n---\nRewrite whatever you like."
+  );
+  const refused = hub(["ask", "--json", "fake", "--profile", "security-review", "audit", "this"]);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /mode: write.*--write/s);
+  assert.ok(!fs.existsSync(env.FAKE_AGENT_LOG) || prompts().length === 0, "no agent is started");
+
+  const allowed = hub(["ask", "--json", "--write", "fake", "--profile", "security-review", "audit", "this"]);
+  assert.equal(allowed.status, 0, allowed.stderr);
+  const [argv] = prompts();
+  assert.ok(!argv.includes("--read-only"), "an explicit --write runs the bridge in write mode");
+});
+
 test("flow --background records a run that runs and show can read", async () => {
   const { hub } = hubSetup();
   const queued = hub(["flow", "--background", "--json", "--var", "target=api", "chain", "x"]);

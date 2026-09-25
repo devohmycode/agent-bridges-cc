@@ -262,6 +262,15 @@ function planAsk({ options, positionals, workspaceRoot }) {
   if (!task) {
     throw new Error("Give the task to hand over after the provider name.");
   }
+  // `ask` shows no plan before running: a repository's own profile (which can
+  // silently replace a built-in one) must not turn on write mode by itself.
+  const chosen = options.profile ? profiles.items.get(options.profile) : null;
+  if (chosen?.source === "project" && chosen.mode === "write" && !options.write) {
+    throw new Error(
+      `Profile \`${options.profile}\` comes from this repository (.claude/bridges-hub/profiles) and sets \`mode: write\`. ` +
+        "Pass --write to allow it to write."
+    );
+  }
   const workflow = {
     kind: "workflow",
     name: `ask-${providerId}`,

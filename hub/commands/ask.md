@@ -12,7 +12,7 @@ Raw slash-command arguments:
 
 - The first argument is the provider: `cursor`, `devin`, `copilot`, `antigravity`, `warp`, `codex` or `grok-build`.
 - If the provider or the task is missing, ask for it with `AskUserQuestion` (offer the profiles from `/bridges-hub:list profiles` when the user seems to want a role). Do not guess the task.
-- The run is read-only unless `--write` is passed or the profile's mode is `write`. When it will write, say so before running.
+- The run is read-only unless `--write` is passed or the profile's mode is `write`. A profile from the repository's `.claude/bridges-hub/profiles` with `mode: write` is refused without `--write`. When it will write, say so before running.
 - With `--background`:
   ```typescript
   Bash({

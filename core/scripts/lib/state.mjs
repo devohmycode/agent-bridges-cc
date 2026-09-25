@@ -4,16 +4,27 @@ import os from "node:os";
 import path from "node:path";
 
 import { resolveWorkspaceRoot } from "./workspace.mjs";
+import { adapter } from "./adapter.mjs";
 
 const STATE_VERSION = 1;
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
-const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "grok-cc-runs");
+const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), `${adapter.pluginName}-runs`);
 const STATE_FILE_NAME = "state.json";
 const LOCK_FILE_NAME = "state.json.lock";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
 const LOCK_MAX_ATTEMPTS = 100;
 const LOCK_RETRY_MS = 20;
+
+// CLAUDE_PLUGIN_DATA can leak in from another plugin's session env export, so
+// only trust it when it points at this plugin's own data directory.
+export function resolvePluginDataDir(env) {
+  if (env[adapter.dataEnv]) {
+    return env[adapter.dataEnv];
+  }
+  const shared = env[PLUGIN_DATA_ENV];
+  return shared && path.basename(shared).startsWith(adapter.pluginName) ? shared : null;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -58,7 +69,7 @@ export function resolveStateDir(cwd) {
   const slugSource = path.basename(workspaceRoot) || "workspace";
   const slug = slugSource.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   const hash = createHash("sha256").update(canonicalWorkspaceRoot).digest("hex").slice(0, 16);
-  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
+  const pluginDataDir = resolvePluginDataDir(process.env);
   const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT_DIR;
   return path.join(stateRoot, `${slug}-${hash}`);
 }

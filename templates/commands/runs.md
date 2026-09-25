@@ -1,11 +1,11 @@
 ---
-description: Show active and recent Grok Build runs for this repository
+description: Show active and recent {{PRODUCT}} runs for this repository
 argument-hint: '[run-id] [--wait] [--timeout-ms <ms>] [--all]'
 disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/grok-bridge.mjs" runs "$ARGUMENTS"`
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" runs "$ARGUMENTS"`
 
 If the user did not pass a run ID:
 - Render the command output as a single Markdown table for the current and past runs in this session.

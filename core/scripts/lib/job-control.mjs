@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
 import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
+import { adapter, bridgeCommand } from "./adapter.mjs";
 
 export const DEFAULT_MAX_STATUS_JOBS = 8;
 export const DEFAULT_MAX_PROGRESS_LINES = 4;
@@ -127,7 +128,7 @@ function inferLegacyJobPhase(job, progressPreview = []) {
 
   for (let index = progressPreview.length - 1; index >= 0; index -= 1) {
     const line = progressPreview[index].toLowerCase();
-    if (line.startsWith("starting grok") || line.startsWith("session ready") || line.startsWith("running grok")) {
+    if (line.startsWith("starting ") || line.startsWith("session ready") || line.startsWith("running ")) {
       return "starting";
     }
     if (line.startsWith("reviewer started") || line.includes("review mode")) {
@@ -149,7 +150,7 @@ function inferLegacyJobPhase(job, progressPreview = []) {
     if (line.startsWith("applying ") || line.startsWith("file changes ")) {
       return "editing";
     }
-    if (line.startsWith("grok error:") || line.startsWith("failed:")) {
+    if (line.startsWith("agent error:") || line.startsWith("failed:")) {
       return "failed";
     }
   }
@@ -161,7 +162,7 @@ export function getSessionRuntimeStatus() {
   return {
     mode: "plugin-owned",
     label: "plugin-owned runs",
-    detail: "Runs are tracked by the Grok Build ↔ Claude Code bridge (PID + log files). There is no shared app-server broker.",
+    detail: `Runs are tracked by the ${adapter.productName} ↔ Claude Code bridge (PID + log files). There is no shared app-server broker.`,
     endpoint: null
   };
 }
@@ -215,7 +216,7 @@ function matchJobReference(jobs, reference, predicate = () => true) {
     throw new Error(`Run reference "${reference}" is ambiguous. Use a longer run id.`);
   }
 
-  throw new Error(`No run found for "${reference}". Run /grok-build:runs to list known runs.`);
+  throw new Error(`No run found for "${reference}". Run ${bridgeCommand("runs")} to list known runs.`);
 }
 
 export function buildStatusSnapshot(cwd, options = {}) {
@@ -251,7 +252,7 @@ export function buildSingleJobSnapshot(cwd, reference, options = {}) {
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const selected = matchJobReference(jobs, reference);
   if (!selected) {
-    throw new Error(`No run found for "${reference}". Run /grok-build:runs to inspect known runs.`);
+    throw new Error(`No run found for "${reference}". Run ${bridgeCommand("runs")} to inspect known runs.`);
   }
 
   return {
@@ -275,14 +276,14 @@ export function resolveResultJob(cwd, reference) {
 
   const active = matchJobReference(jobs, reference, (job) => job.status === "queued" || job.status === "running");
   if (active) {
-    throw new Error(`Run ${active.id} is still ${active.status}. Check /grok-build:runs and try again once it finishes.`);
+    throw new Error(`Run ${active.id} is still ${active.status}. Check ${bridgeCommand("runs")} and try again once it finishes.`);
   }
 
   if (reference) {
-    throw new Error(`No finished run found for "${reference}". Run /grok-build:runs to inspect active runs.`);
+    throw new Error(`No finished run found for "${reference}". Run ${bridgeCommand("runs")} to inspect active runs.`);
   }
 
-  throw new Error("No finished Grok Build runs found for this repository yet.");
+  throw new Error(`No finished ${adapter.productName} runs found for this repository yet.`);
 }
 
 export function resolveCancelableJob(cwd, reference, options = {}) {
@@ -304,12 +305,12 @@ export function resolveCancelableJob(cwd, reference, options = {}) {
     return { workspaceRoot, job: sessionScopedActiveJobs[0] };
   }
   if (sessionScopedActiveJobs.length > 1) {
-    throw new Error("Multiple Grok Build runs are active. Pass a run id to /grok-build:stop.");
+    throw new Error(`Multiple ${adapter.productName} runs are active. Pass a run id to ${bridgeCommand("stop")}.`);
   }
 
   if (getCurrentSessionId(options)) {
-    throw new Error("No active Grok Build runs to stop for this session.");
+    throw new Error(`No active ${adapter.productName} runs to stop for this session.`);
   }
 
-  throw new Error("No active Grok Build runs to stop.");
+  throw new Error(`No active ${adapter.productName} runs to stop.`);
 }

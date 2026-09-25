@@ -5,8 +5,8 @@ import process from "node:process";
 
 import { terminateProcessTree } from "./lib/process.mjs";
 import { claimJobTerminal, loadState, resolveStateFile, saveState } from "./lib/state.mjs";
-import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mjs";
 import { resolveJobKillTargets, SESSION_ID_ENV } from "./lib/tracked-jobs.mjs";
+import { adapter } from "./lib/adapter.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
@@ -80,8 +80,7 @@ function cleanupSessionJobs(cwd, sessionId) {
 
 function handleSessionStart(input) {
   appendEnvVar(SESSION_ID_ENV, input.session_id);
-  appendEnvVar(TRANSCRIPT_PATH_ENV, input.transcript_path);
-  appendEnvVar(PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
+  appendEnvVar(adapter.dataEnv, process.env[PLUGIN_DATA_ENV]);
 }
 
 async function handleSessionEnd(input) {

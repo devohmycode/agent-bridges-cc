@@ -1,5 +1,5 @@
 {
-  "description": "Session lifecycle hooks for the Grok Build ↔ Claude Code bridge.",
+  "description": "Session lifecycle hooks for the agent bridge (tags runs with the Claude session and stops them when it ends).",
   "hooks": {
     "SessionStart": [
       {

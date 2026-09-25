@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import process from "node:process";
 
+import { adapter } from "./adapter.mjs";
+
 import {
   claimJobTerminal,
   isTerminalJobStatus,
@@ -12,7 +14,7 @@ import {
   writeJobFile
 } from "./state.mjs";
 
-export const SESSION_ID_ENV = "GROK_CC_SESSION_ID";
+export const SESSION_ID_ENV = adapter.sessionEnv;
 
 export function nowIso() {
   return new Date().toISOString();
@@ -132,7 +134,7 @@ export function createProgressReporter({ stderr = false, logFile = null, onEvent
     const event = normalizeProgressEvent(eventOrMessage);
     const stderrMessage = event.stderrMessage ?? event.message;
     if (stderr && stderrMessage) {
-      process.stderr.write(`[grok-cc] ${stderrMessage}\n`);
+      process.stderr.write(`[${adapter.pluginName}] ${stderrMessage}\n`);
     }
     appendLogLine(logFile, event.message);
     appendLogBlock(logFile, event.logTitle, event.logBody);

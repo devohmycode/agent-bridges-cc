@@ -1,11 +1,11 @@
 ---
-description: Run a Grok Build code review against local git state
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--effort <low|medium|high>]'
+description: Run a {{PRODUCT}} code review against local git state
+argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>]{{EFFORT_ARG}}'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
-Run a Grok Build review through the plugin bridge (read-only plan mode).
+Run a {{PRODUCT}} review through the plugin bridge. The run is read-only. {{READONLY_NOTE}}
 
 Raw slash-command arguments:
 `$ARGUMENTS`
@@ -13,7 +13,7 @@ Raw slash-command arguments:
 Core constraint:
 - This command is review-only.
 - Do not fix issues, apply patches, or suggest that you are about to make changes.
-- Your only job is to run the review and return Grok's output verbatim to the user.
+- Your only job is to run the review and return {{NAME}}'s output verbatim to the user.
 
 Execution mode rules:
 - If the raw arguments include `--wait`, do not ask. Run the review in the foreground.
@@ -36,15 +36,15 @@ Argument handling:
 - Do not strip `--wait` or `--background` yourself.
 - Do not add extra review instructions or rewrite the user's intent.
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the bridge call; do not treat them as review focus text.
-- Leave `--model` and `--effort` unset unless the user explicitly asks for them. Accepted effort values: `low`, `medium`, `high`.
-- The bridge script parses `--wait` and `--background`. Bridge `--background` owns the long-running process group (detached `run-worker` + grok agent). Claude Code's `Bash(..., run_in_background: true)` is only for the short enqueue call, not the long review process.
-- `/grok-build:review` does not support staged-only review, unstaged-only review, or extra focus text.
-- If the user needs a tougher design challenge pass, they should use `/grok-build:critique`.
+- Leave `--model` and `--effort` unset unless the user explicitly asks for them. {{EFFORT_VALUES}}
+- The bridge script parses `--wait` and `--background`. Bridge `--background` owns the long-running process group (detached `run-worker` + `{{CLI}}` child). Claude Code's `Bash(..., run_in_background: true)` is only for the short enqueue call, not the long review process.
+- `/{{PLUGIN}}:review` does not support staged-only review, unstaged-only review, or extra focus text.
+- If the user needs a tougher design challenge pass, they should use `/{{PLUGIN}}:critique`.
 
 Foreground flow:
 - Run:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/grok-bridge.mjs" review "$ARGUMENTS"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" review "$ARGUMENTS"
 ```
 - Return the command stdout verbatim, exactly as-is.
 - Do not paraphrase, summarize, or add commentary before or after it.
@@ -55,10 +55,10 @@ Background flow:
 - Launch with `Bash` (Claude may still use `run_in_background: true` for the short enqueue call; the long-running work is the bridge `run-worker`):
 ```typescript
 Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/grok-bridge.mjs" review --background "$ARGUMENTS"`,
-  description: "Grok Build review",
+  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" review --background "$ARGUMENTS"`,
+  description: "{{PRODUCT}} review",
   run_in_background: true
 })
 ```
 - Do not call `BashOutput` or wait for completion in this turn.
-- After launching the command, tell the user: "Grok Build review started in the background. Check `/grok-build:runs` for progress. Stop with `/grok-build:stop`."
+- After launching the command, tell the user: "{{PRODUCT}} review started in the background. Check `/{{PLUGIN}}:runs` for progress. Stop with `/{{PLUGIN}}:stop`."

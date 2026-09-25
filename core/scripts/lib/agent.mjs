@@ -1,137 +1,88 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import process from "node:process";
 
+import { adapter } from "./adapter.mjs";
 import { readJsonFile } from "./fs.mjs";
-import { binaryAvailable, runCommand } from "./process.mjs";
+import { quoteForCmd } from "./launch.mjs";
+import { runCommand } from "./process.mjs";
 
 export const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
 
-const DEFAULT_BINARY = "grok";
-const BINARY_ENV = "GROK_BINARY";
-
-export function resolveGrokBinary(env = process.env) {
-  const override = env?.[BINARY_ENV];
-  if (override && String(override).trim()) {
-    return String(override).trim();
-  }
-  return DEFAULT_BINARY;
+export function resolveLaunch(env = process.env) {
+  return adapter.resolveLaunch(env);
 }
 
-export function runGrok(args = [], options = {}) {
-  const binary = options.binary ?? resolveGrokBinary(options.env ?? process.env);
-  return runCommand(binary, args, {
+function spawnArgs(launch, args) {
+  const full = [...launch.prefixArgs, ...args];
+  if (!launch.shell) {
+    return { command: launch.command, args: full, shell: false };
+  }
+  // `.cmd` shims: hand cmd.exe one pre-quoted command line.
+  const line = [quoteForCmd(launch.command), ...full.map(quoteForCmd)].join(" ");
+  return { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `"${line}"`], shell: false, verbatim: true };
+}
+
+function launchEnv(launch, env) {
+  return { ...(env ?? process.env), ...launch.env };
+}
+
+export function runAgentCommand(args = [], options = {}) {
+  const launch = options.launch ?? resolveLaunch(options.env ?? process.env);
+  const spec = spawnArgs(launch, args);
+  return runCommand(spec.command, spec.args, {
     cwd: options.cwd,
-    env: options.env,
+    env: launchEnv(launch, options.env),
     input: options.input,
     maxBuffer: options.maxBuffer,
-    stdio: options.stdio
+    shell: false,
+    windowsVerbatimArguments: spec.verbatim
   });
 }
 
-export function getGrokAvailability(cwd, options = {}) {
-  const binary = options.binary ?? resolveGrokBinary(options.env ?? process.env);
-  const versionStatus = binaryAvailable(binary, ["version"], { cwd, env: options.env });
-  if (!versionStatus.available) {
-    const alt = binaryAvailable(binary, ["--version"], { cwd, env: options.env });
-    if (!alt.available) {
-      return {
-        available: false,
-        detail: versionStatus.detail,
-        binary
-      };
-    }
-    return {
-      available: true,
-      detail: alt.detail,
-      binary
-    };
-  }
-  return {
-    available: true,
-    detail: versionStatus.detail,
-    binary
-  };
-}
-
-function buildAuthStatus(fields = {}) {
-  return {
-    available: true,
-    loggedIn: false,
-    detail: "not authenticated",
-    source: "models-probe",
-    authMethod: null,
-    verified: null,
-    ...fields
-  };
-}
-
-export function runModelsProbe(cwd, options = {}) {
-  const binary = options.binary ?? resolveGrokBinary(options.env ?? process.env);
-  const result = runGrok(["models"], {
-    cwd,
-    env: options.env,
-    binary
-  });
-
-  if (result.error && /** @type {NodeJS.ErrnoException} */ (result.error).code === "ENOENT") {
-    return buildAuthStatus({
-      available: false,
-      loggedIn: false,
-      detail: "grok binary not found",
-      source: "availability"
-    });
-  }
-
+export function getAgentAvailability(cwd, options = {}) {
+  const launch = options.launch ?? resolveLaunch(options.env ?? process.env);
+  const result = runAgentCommand(adapter.versionArgs, { cwd, env: options.env, launch });
+  const binary = launch.command;
   if (result.error) {
-    return buildAuthStatus({
-      available: true,
-      loggedIn: false,
-      detail: result.error.message,
-      source: "models-probe"
-    });
+    const missing = /** @type {NodeJS.ErrnoException} */ (result.error).code === "ENOENT";
+    return { available: false, detail: missing ? `${adapter.cliName} not found` : result.error.message, binary };
   }
-
   if (result.status !== 0) {
     const detail = (result.stderr || result.stdout || `exit ${result.status}`).trim();
-    return buildAuthStatus({
-      available: true,
-      loggedIn: false,
-      detail: detail || "grok models failed; not logged in or not ready",
-      source: "models-probe"
-    });
+    return { available: false, detail, binary };
   }
-
-  const stdout = (result.stdout || "").trim();
-  const loggedInHint = /logged in|available models|default model/i.test(stdout);
-  return buildAuthStatus({
-    available: true,
-    loggedIn: true,
-    detail: loggedInHint
-      ? firstLine(stdout) || "grok models succeeded"
-      : firstLine(stdout) || "grok models succeeded (treated as logged in)",
-    source: "models-probe",
-    authMethod: "grok-cli",
-    verified: true
-  });
+  return { available: true, detail: firstLine(result.stdout || result.stderr) || "ok", binary };
 }
 
-export function getGrokAuthStatus(cwd, options = {}) {
-  const availability = getGrokAvailability(cwd, options);
+export function getAgentAuthStatus(cwd, options = {}) {
+  const availability = options.availability ?? getAgentAvailability(cwd, options);
   if (!availability.available) {
-    return {
-      available: false,
-      loggedIn: false,
-      detail: availability.detail,
-      source: "availability",
-      authMethod: null,
-      verified: null
-    };
+    return { available: false, loggedIn: false, detail: availability.detail, source: "availability" };
   }
-  return runModelsProbe(cwd, { ...options, binary: availability.binary });
+  if (typeof adapter.checkAuth === "function") {
+    return { available: true, source: "adapter", ...adapter.checkAuth(options.env ?? process.env) };
+  }
+  if (!adapter.authArgs) {
+    return { available: true, loggedIn: null, detail: "not verified (no auth probe for this CLI)", source: "none" };
+  }
+  const result = runAgentCommand(adapter.authArgs, { cwd, env: options.env });
+  if (result.error) {
+    return { available: true, loggedIn: false, detail: result.error.message, source: "auth-probe" };
+  }
+  const parsed = adapter.parseAuth
+    ? adapter.parseAuth(result)
+    : { loggedIn: result.status === 0, detail: firstLine(result.stdout || result.stderr) };
+  return {
+    available: true,
+    source: "auth-probe",
+    ...parsed,
+    detail: parsed.detail || (parsed.loggedIn ? "authenticated" : "not authenticated")
+  };
 }
 
 function firstLine(text) {
@@ -152,93 +103,114 @@ function emitProgress(onProgress, message, phase = null, extra = {}) {
   onProgress({ message, phase, ...extra });
 }
 
-function buildHeadlessArgs(prompt, options = {}) {
-  const args = [];
-
-  if (options.resumeSessionId) {
-    args.push("-r", options.resumeSessionId);
-  } else if (options.continueLast) {
-    args.push("-c");
-  } else if (options.sessionId) {
-    args.push("--session-id", options.sessionId);
-  }
-
-  args.push("-p", prompt);
-
-  if (options.cwd) {
-    args.push("--cwd", options.cwd);
-  }
-  if (options.agent) {
-    args.push("--agent", options.agent);
-  }
-  if (options.permissionMode) {
-    args.push("--permission-mode", options.permissionMode);
-  }
-  if (options.sandbox) {
-    args.push("--sandbox", options.sandbox);
-  }
-  if (options.alwaysApprove) {
-    args.push("--always-approve");
-  }
-  if (options.model) {
-    args.push("--model", options.model);
-  }
-  if (options.effort) {
-    args.push("--effort", options.effort);
-  }
-  if (options.outputFormat) {
-    args.push("--output-format", options.outputFormat);
-  } else {
-    args.push("--output-format", "plain");
-  }
-  if (options.jsonSchema) {
-    const schemaText =
-      typeof options.jsonSchema === "string" ? options.jsonSchema : JSON.stringify(options.jsonSchema);
-    args.push("--json-schema", schemaText);
-  }
-
-  return args;
+function createRunDir() {
+  const root = path.join(os.tmpdir(), "agent-bridges-cc", adapter.pluginName);
+  fs.mkdirSync(root, { recursive: true });
+  return fs.mkdtempSync(path.join(root, "run-"));
 }
 
+function preparePrompt(prompt, runDir, launch) {
+  const mustUseFile =
+    adapter.promptVia === "file" ||
+    (adapter.promptVia === "arg" && (launch.shell || prompt.length > adapter.maxArgPromptChars));
+  if (!mustUseFile) {
+    return { prompt, promptFile: null };
+  }
+  const promptFile = path.join(runDir, "prompt.md");
+  fs.writeFileSync(promptFile, prompt, "utf8");
+  if (adapter.promptVia === "file") {
+    return { prompt, promptFile };
+  }
+  return {
+    prompt: `Read the complete task instructions from the file ${promptFile} and follow them exactly. That file is the task; this line only points to it.`,
+    promptFile
+  };
+}
+
+function gitSnapshot(cwd) {
+  const status = runCommand("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd, shell: false });
+  if (status.error || status.status !== 0) {
+    return null;
+  }
+  const diff = runCommand("git", ["diff", "HEAD", "--no-ext-diff", "--binary"], { cwd, shell: false, maxBuffer: 64 * 1024 * 1024 });
+  const digest = crypto.createHash("sha256").update(diff.stdout ?? "").digest("hex");
+  return { lines: status.stdout.split(/\r?\n/).filter(Boolean), digest };
+}
+
+function compareSnapshots(before, after) {
+  if (!before || !after) {
+    return null;
+  }
+  if (before.digest === after.digest && before.lines.join("\n") === after.lines.join("\n")) {
+    return null;
+  }
+  const previous = new Set(before.lines);
+  const changed = after.lines.filter((line) => !previous.has(line));
+  return changed.length > 0 ? changed : ["(tracked file contents changed)"];
+}
+
+/**
+ * Run the provider CLI once, non-interactively, and collect its final answer.
+ * Read-only runs are bracketed by a git snapshot so that a provider without a
+ * real read-only mode cannot silently modify the working tree.
+ */
 export function runHeadlessAgent(cwd, options = {}) {
-  const binary = options.binary ?? resolveGrokBinary(options.env ?? process.env);
-  const prompt = String(options.prompt ?? "").trim() || options.defaultPrompt || "";
-  if (!prompt) {
-    return Promise.reject(new Error("A prompt is required for this Grok run."));
+  const launch = options.launch ?? resolveLaunch(options.env ?? process.env);
+  const rawPrompt = String(options.prompt ?? "").trim() || options.defaultPrompt || "";
+  if (!rawPrompt) {
+    return Promise.reject(new Error(`A prompt is required for this ${adapter.displayName} run.`));
   }
 
-  const sessionId = options.resumeSessionId
-    ? options.resumeSessionId
-    : options.sessionId || (options.assignSessionId === false ? null : crypto.randomUUID());
+  const write = Boolean(options.write);
+  const fullPrompt = !write && adapter.readOnlyPrompt ? `${rawPrompt}
 
-  const args = buildHeadlessArgs(prompt, {
-    ...options,
+${adapter.readOnlyPrompt}` : rawPrompt;
+  const runDir = createRunDir();
+  const { prompt, promptFile } = preparePrompt(fullPrompt, runDir, launch);
+  const plan = adapter.buildRun({
+    prompt,
+    promptFile,
+    runDir,
     cwd: options.cwd ?? cwd,
-    sessionId: options.resumeSessionId || options.continueLast ? undefined : sessionId
+    write,
+    model: options.model ?? null,
+    effort: options.effort ?? null,
+    resumeSessionId: options.resumeSessionId ?? null,
+    newSessionId: crypto.randomUUID(),
+    schemaPath: options.schemaPath ?? null,
+    env: options.env ?? process.env
   });
 
+  const guard = !write && options.guardReadOnly !== false ? gitSnapshot(cwd) : null;
+  const spec = spawnArgs(launch, plan.args);
   const platform = options.platform ?? process.platform;
   const detached = options.detached ?? platform !== "win32";
 
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, {
+    const child = spawn(spec.command, spec.args, {
       cwd,
-      env: options.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...launchEnv(launch, options.env), ...(plan.env ?? {}) },
+      stdio: [plan.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
       detached,
-      windowsHide: true
+      windowsHide: true,
+      windowsVerbatimArguments: spec.verbatim
     });
 
     const agentPid = child.pid ?? null;
-    emitProgress(options.onProgress, `Running grok (${binary}).`, "starting", {
-      threadId: sessionId,
+    const knownSessionId = plan.sessionId ?? options.resumeSessionId ?? null;
+    emitProgress(options.onProgress, `Running ${adapter.cliName} (${launch.command}).`, "starting", {
+      threadId: knownSessionId,
       agentPid,
       pid: agentPid
     });
 
+    if (plan.stdin != null) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(plan.stdin);
+    }
+
     let stdout = "";
     let stderr = "";
-
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -249,14 +221,28 @@ export function runHeadlessAgent(cwd, options = {}) {
     });
 
     child.on("error", (error) => {
+      fs.rmSync(runDir, { recursive: true, force: true });
       reject(error);
     });
 
     child.on("close", (code, signal) => {
-      const status = code ?? (signal ? 1 : 0);
+      let status = code ?? (signal ? 1 : 0);
+      let parsed;
+      try {
+        parsed = adapter.parseRun({ stdout, stderr, status, plan, runDir });
+      } catch (error) {
+        parsed = { finalMessage: stdout.trimEnd(), failure: `Could not parse ${adapter.cliName} output: ${error.message}` };
+      }
+      fs.rmSync(runDir, { recursive: true, force: true });
+
+      const sessionId = parsed.sessionId ?? knownSessionId;
+      if (status === 0 && parsed.failure) {
+        status = 1;
+      }
+      const readOnlyViolation = guard ? compareSnapshots(guard, gitSnapshot(cwd)) : null;
       emitProgress(
         options.onProgress,
-        status === 0 ? "Grok finished." : `Grok exited with status ${status}.`,
+        status === 0 ? `${adapter.displayName} finished.` : `${adapter.displayName} exited with status ${status}.`,
         status === 0 ? "finalizing" : "failed",
         { threadId: sessionId, agentPid }
       );
@@ -264,87 +250,18 @@ export function runHeadlessAgent(cwd, options = {}) {
         status,
         signal,
         stdout,
-        stderr,
+        stderr: [parsed.failure, stderr.trim()].filter(Boolean).join("\n"),
+        notes: parsed.notes ?? [],
         sessionId,
         threadId: sessionId,
         agentPid,
-        finalMessage: stdout.trimEnd(),
-        args,
-        binary
+        finalMessage: String(parsed.finalMessage ?? "").trimEnd(),
+        readOnlyViolation,
+        args: plan.args,
+        binary: launch.command
       });
     });
   });
-}
-
-export function runImport(cwd, options = {}) {
-  const binary = options.binary ?? resolveGrokBinary(options.env ?? process.env);
-  const args = ["import"];
-  if (options.list) {
-    args.push("--list");
-  }
-  if (options.sourcePath) {
-    args.push(options.sourcePath);
-  }
-  if (options.json !== false) {
-    args.push("--json");
-  }
-
-  emitProgress(options.onProgress, "Importing Claude session into Grok.", "transferring");
-
-  const result = runGrok(args, {
-    cwd,
-    env: options.env,
-    binary
-  });
-
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    const detail = (result.stderr || result.stdout || `exit ${result.status}`).trim();
-    throw new Error(detail || "grok import failed");
-  }
-
-  const raw = (result.stdout || "").trim();
-  let parsed = null;
-  let sessionId = null;
-
-  const lines = raw.split(/\r?\n/).filter(Boolean);
-  for (const line of lines) {
-    try {
-      const obj = JSON.parse(line);
-      parsed = obj;
-      sessionId =
-        obj.sessionId ??
-        obj.session_id ??
-        obj.id ??
-        obj.importedSessionId ??
-        obj.threadId ??
-        sessionId;
-    } catch {
-    }
-  }
-
-  if (!sessionId) {
-    const match = raw.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i);
-    if (match) {
-      sessionId = match[0];
-    }
-  }
-
-  emitProgress(options.onProgress, sessionId ? `Imported session ${sessionId}.` : "Import completed.", "completed", {
-    threadId: sessionId
-  });
-
-  return {
-    status: 0,
-    stdout: raw,
-    stderr: result.stderr,
-    sessionId,
-    threadId: sessionId,
-    parsed,
-    resumeCommand: sessionId ? `grok -r ${sessionId}` : null
-  };
 }
 
 export function parseStructuredOutput(rawOutput, fallback = {}) {
@@ -352,7 +269,7 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
     return {
       ...fallback,
       parsed: null,
-      parseError: fallback.failureMessage ?? "Grok did not return a final structured message.",
+      parseError: fallback.failureMessage || `${adapter.displayName} did not return a final structured message.`,
       rawOutput: rawOutput ?? ""
     };
   }
@@ -411,7 +328,7 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
   return {
     ...fallback,
     parsed: null,
-    parseError: "Could not parse structured JSON from Grok output.",
+    parseError: `Could not parse structured JSON from ${adapter.displayName} output.`,
     rawOutput: text
   };
 }

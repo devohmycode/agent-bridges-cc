@@ -7,20 +7,18 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
-import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
+import { adapter, bridgeCommand } from "./lib/adapter.mjs";
 import {
   buildReviewPrompt,
   DEFAULT_CONTINUE_PROMPT,
-  getGrokAuthStatus,
-  getGrokAvailability,
+  getAgentAuthStatus,
+  getAgentAvailability,
   parseStructuredOutput,
-  readOutputSchema,
   runHeadlessAgent,
-  runImport,
   schemaInstructionsFromPath
-} from "./lib/grok.mjs";
+} from "./lib/agent.mjs";
 import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
@@ -69,20 +67,22 @@ const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
-const VALID_REASONING_EFFORTS = new Set(["low", "medium", "high"]);
+const VALID_REASONING_EFFORTS = new Set(adapter.efforts ?? []);
+const EFFORT_USAGE = adapter.efforts ? ` [--effort <${adapter.efforts.join("|")}>]` : "";
 
 function printUsage() {
   console.log(
     [
+      `${adapter.productName} bridge for Claude Code`,
+      "",
       "Usage:",
-      "  node scripts/grok-bridge.mjs check [--json]",
-      "  node scripts/grok-bridge.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high>]",
-      "  node scripts/grok-bridge.mjs critique [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high>] [focus text]",
-      "  node scripts/grok-bridge.mjs run [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [--effort <low|medium|high>] [prompt]",
-      "  node scripts/grok-bridge.mjs import [--source <claude-jsonl>] [--json]",
-      "  node scripts/grok-bridge.mjs runs [run-id] [--all] [--json]",
-      "  node scripts/grok-bridge.mjs show [run-id] [--json]",
-      "  node scripts/grok-bridge.mjs stop [run-id] [--json]"
+      "  node scripts/bridge.mjs check [--json]",
+      `  node scripts/bridge.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>]${EFFORT_USAGE}`,
+      `  node scripts/bridge.mjs critique [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>]${EFFORT_USAGE} [focus text]`,
+      `  node scripts/bridge.mjs run [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>]${EFFORT_USAGE} [prompt]`,
+      "  node scripts/bridge.mjs runs [run-id] [--all] [--json]",
+      "  node scripts/bridge.mjs show [run-id] [--json]",
+      "  node scripts/bridge.mjs stop [run-id] [--json]"
     ].join("\n")
   );
 }
@@ -107,9 +107,13 @@ function normalizeReasoningEffort(effort) {
   if (!normalized) {
     return null;
   }
+  if (!adapter.efforts) {
+    process.stderr.write(`Warning: ${adapter.cliName} has no reasoning-effort setting; ignoring --effort ${effort}.\n`);
+    return null;
+  }
   if (!VALID_REASONING_EFFORTS.has(normalized)) {
     throw new Error(
-      `Unsupported reasoning effort "${effort}". Use one of: low, medium, high.`
+      `Unsupported reasoning effort "${effort}". Use one of: ${adapter.efforts.join(", ")}.`
     );
   }
   return normalized;
@@ -177,24 +181,30 @@ function firstMeaningfulLine(text, fallback) {
 }
 
 async function buildCheckReport(cwd, actionsTaken = []) {
-  const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
-  const grokStatus = getGrokAvailability(cwd);
-  const authStatus = getGrokAuthStatus(cwd);
+  const nodeStatus = binaryAvailable(process.execPath, ["--version"], { cwd, shell: false });
+  const cliStatus = getAgentAvailability(cwd);
+  const authStatus = getAgentAuthStatus(cwd, { availability: cliStatus });
+  const readOnlyEnforced = adapter.readOnlyEnforced(process.env);
 
   const nextSteps = [];
-  if (!grokStatus.available) {
-    nextSteps.push("Install the Grok Build CLI and ensure `grok` is on PATH (or set GROK_BINARY).");
+  if (!cliStatus.available) {
+    nextSteps.push(adapter.installHint);
   }
-  if (grokStatus.available && !authStatus.loggedIn) {
-    nextSteps.push("Authenticate the Grok CLI (for example by running `grok` interactively and completing login).");
-    nextSteps.push("Verify with `grok models` — a successful run means you are logged in.");
+  if (cliStatus.available && authStatus.loggedIn === false) {
+    nextSteps.push(adapter.authHint);
+  }
+  if (!readOnlyEnforced) {
+    nextSteps.push(adapter.readOnlyNote);
   }
 
   return {
-    ready: nodeStatus.available && grokStatus.available && authStatus.loggedIn,
+    ready: nodeStatus.available && cliStatus.available && authStatus.loggedIn !== false,
+    provider: adapter.id,
     node: nodeStatus,
-    grok: grokStatus,
+    cli: cliStatus,
     auth: authStatus,
+    readOnly: { enforced: readOnlyEnforced, detail: adapter.readOnlyNote },
+    models: adapter.modelHint,
     sessionRuntime: getSessionRuntimeStatus(),
     actionsTaken,
     nextSteps
@@ -215,6 +225,7 @@ async function handleCheck(argv) {
 function buildCritiquePrompt(context, focusText) {
   const template = loadPromptTemplate(ROOT_DIR, "critique");
   return interpolateTemplate(template, {
+    AGENT_NAME: adapter.productName,
     REVIEW_KIND: "Critique",
     TARGET_LABEL: context.target.label,
     USER_FOCUS: focusText || "No extra focus provided.",
@@ -223,13 +234,33 @@ function buildCritiquePrompt(context, focusText) {
   });
 }
 
-function ensureGrokAvailable(cwd) {
-  const availability = getGrokAvailability(cwd);
+function ensureAgentAvailable(cwd) {
+  const availability = getAgentAvailability(cwd);
   if (!availability.available) {
     throw new Error(
-      "Grok CLI is not installed or not on PATH. Install it, set GROK_BINARY if needed, then rerun `/grok-build:check`."
+      `${adapter.cliName} is not available (${availability.detail}). ${adapter.installHint} Then rerun \`${bridgeCommand("check")}\`.`
     );
   }
+}
+
+function appendRunNotes(rendered, result, { write }) {
+  const lines = [];
+  if (result.readOnlyViolation?.length) {
+    lines.push(`WARNING: ${adapter.displayName} changed the working tree during a read-only run:`);
+    for (const entry of result.readOnlyViolation) {
+      lines.push(`  ${entry}`);
+    }
+  } else if (!write && !adapter.readOnlyEnforced(process.env)) {
+    lines.push(`Note: ${adapter.readOnlyNote}`);
+  }
+  for (const note of result.notes ?? []) {
+    lines.push(`Note: ${note}`);
+  }
+  if (lines.length === 0) {
+    return rendered;
+  }
+  const base = rendered.endsWith("\n") ? rendered : `${rendered}\n`;
+  return `${base}\n${lines.join("\n")}\n`;
 }
 
 function renderStatusPayload(report, asJson) {
@@ -284,7 +315,7 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
   const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
-    throw new Error(`Delegate run ${activeTask.id} is still running. Use /grok-build:runs before continuing it.`);
+    throw new Error(`Delegate run ${activeTask.id} is still running. Use ${bridgeCommand("runs")} before continuing it.`);
   }
 
   const trackedTask = findLatestResumableTaskJob(visibleJobs);
@@ -296,7 +327,7 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
 }
 
 async function executeReviewRun(request) {
-  ensureGrokAvailable(request.cwd);
+  ensureAgentAvailable(request.cwd);
   ensureGitRepository(request.cwd);
 
   const target = resolveReviewTarget(request.cwd, {
@@ -327,16 +358,10 @@ async function executeReviewRun(request) {
 
   const result = await runHeadlessAgent(context.repoRoot, {
     prompt,
-    agent: "explore",
-    // Headless runs have no user to click Approve, so "plan" mode with no
-    // approver can hang or fail on any tool call. `sandbox: "read-only"` is
-    // the actual safety boundary here, so auto-approving within it is safe.
-    alwaysApprove: true,
-    sandbox: "read-only",
+    write: false,
     model: request.model,
     effort: request.effort,
-    outputFormat: structured ? "json" : "plain",
-    jsonSchema: structured ? readOutputSchema(REVIEW_SCHEMA) : undefined,
+    schemaPath: structured && adapter.structuredOutput === "schema" ? REVIEW_SCHEMA : null,
     onProgress: request.onProgress
   });
 
@@ -354,10 +379,13 @@ async function executeReviewRun(request) {
         branch: context.branch,
         summary: context.summary
       },
-      grok: {
+      agent: {
+        provider: adapter.id,
         status: result.status,
         stderr: result.stderr,
-        stdout: result.finalMessage
+        stdout: result.finalMessage,
+        notes: result.notes,
+        readOnlyViolation: result.readOnlyViolation
       },
       result: parsed.parsed,
       rawOutput: parsed.rawOutput,
@@ -369,15 +397,19 @@ async function executeReviewRun(request) {
       threadId: result.threadId,
       turnId: null,
       payload,
-      rendered: renderReviewResult(parsed, {
-        reviewLabel: reviewName,
-        targetLabel: context.target.label
-      }),
+      rendered: appendRunNotes(
+        renderReviewResult(parsed, {
+          reviewLabel: reviewName,
+          targetLabel: context.target.label
+        }),
+        result,
+        { write: false }
+      ),
       summary:
         parsed.parsed?.summary ??
         parsed.parseError ??
         firstMeaningfulLine(result.finalMessage, `${reviewName} finished.`),
-      jobTitle: `Grok Build ${reviewName}`,
+      jobTitle: `${adapter.productName} ${reviewName}`,
       jobClass: "review",
       targetLabel: context.target.label
     };
@@ -387,20 +419,23 @@ async function executeReviewRun(request) {
     review: reviewName,
     target,
     threadId: result.threadId,
-    grok: {
+    agent: {
+      provider: adapter.id,
       status: result.status,
       stderr: result.stderr,
-      stdout: result.finalMessage
+      stdout: result.finalMessage,
+      notes: result.notes,
+      readOnlyViolation: result.readOnlyViolation
     }
   };
-  const rendered = renderNativeReviewResult(
+  const rendered = appendRunNotes(renderNativeReviewResult(
     {
       status: result.status,
       stdout: result.finalMessage,
       stderr: result.stderr
     },
     { reviewLabel: reviewName, targetLabel: target.label }
-  );
+  ), result, { write: false });
 
   return {
     exitStatus: result.status,
@@ -409,7 +444,7 @@ async function executeReviewRun(request) {
     payload,
     rendered,
     summary: firstMeaningfulLine(result.finalMessage, `${reviewName} completed.`),
-    jobTitle: `Grok Build ${reviewName}`,
+    jobTitle: `${adapter.productName} ${reviewName}`,
     jobClass: "review",
     targetLabel: target.label
   };
@@ -417,7 +452,7 @@ async function executeReviewRun(request) {
 
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
-  ensureGrokAvailable(request.cwd);
+  ensureAgentAvailable(request.cwd);
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
@@ -430,7 +465,7 @@ async function executeTaskRun(request) {
       excludeJobId: request.jobId
     });
     if (!latestThread) {
-      throw new Error("No previous Grok Build delegate session was found for this repository.");
+      throw new Error(`No previous ${adapter.productName} delegate session was found for this repository.`);
     }
     resumeSessionId = latestThread.id;
   }
@@ -447,33 +482,33 @@ async function executeTaskRun(request) {
     resumeSessionId,
     model: request.model,
     effort: request.effort,
-    // Headless runs have no user to click Approve, so a read-only run using
-    // "plan" mode with no approver can hang or fail on any tool call.
-    // `sandbox: "read-only"` is the actual safety boundary, so auto-approve
-    // is safe in both the write and read-only cases here.
-    alwaysApprove: true,
-    sandbox: write ? undefined : "read-only",
-    outputFormat: "plain",
+    write,
     onProgress: request.onProgress
   });
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
   const failureMessage = result.status === 0 ? "" : result.stderr || "";
-  const rendered = renderTaskResult(
-    {
-      rawOutput,
-      failureMessage
-    },
-    {
-      title: taskMetadata.title,
-      jobId: request.jobId ?? null,
-      write
-    }
+  const rendered = appendRunNotes(
+    renderTaskResult(
+      {
+        rawOutput,
+        failureMessage
+      },
+      {
+        title: taskMetadata.title,
+        jobId: request.jobId ?? null,
+        write
+      }
+    ),
+    result,
+    { write }
   );
   const payload = {
     status: result.status,
     threadId: result.threadId,
-    rawOutput
+    rawOutput,
+    notes: result.notes,
+    readOnlyViolation: result.readOnlyViolation
   };
 
   return {
@@ -492,13 +527,13 @@ async function executeTaskRun(request) {
 function buildReviewJobMetadata(reviewName, target) {
   return {
     kind: reviewName === "Critique" ? "critique" : "review",
-    title: reviewName === "Review" ? "Grok Build Review" : `Grok Build ${reviewName}`,
+    title: `${adapter.productName} ${reviewName}`,
     summary: `${reviewName} ${target.label}`
   };
 }
 
 function buildTaskRunMetadata({ prompt, resumeLast = false }) {
-  const title = resumeLast ? "Grok Build Resume" : "Grok Build Delegate";
+  const title = resumeLast ? `${adapter.productName} Resume` : `${adapter.productName} Delegate`;
   const fallbackSummary = resumeLast ? DEFAULT_CONTINUE_PROMPT : "Delegate";
   return {
     title,
@@ -507,7 +542,7 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
 }
 
 function renderQueuedTaskLaunch(payload) {
-  return `${payload.title} started in the background as ${payload.jobId}. Check /grok-build:runs ${payload.jobId} for progress.\n`;
+  return `${payload.title} started in the background as ${payload.jobId}. Check ${bridgeCommand("runs", payload.jobId)} for progress.\n`;
 }
 
 function createBridgeJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false }) {
@@ -559,35 +594,6 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
   };
 }
 
-function renderTransferResult(payload) {
-  const lines = [
-    "Imported the Claude session into a Grok session.",
-    payload.threadId ? `Grok session ID: ${payload.threadId}` : "Grok session ID: (not detected in import output)",
-    payload.resumeCommand ? `Resume in Grok: ${payload.resumeCommand}` : "Resume with: grok -r <session-id>"
-  ];
-  return `${lines.join("\n")}\n`;
-}
-
-async function executeTransfer(cwd, options = {}) {
-  ensureGrokAvailable(cwd);
-  const sourcePath = resolveClaudeSessionPath(cwd, {
-    source: options.source
-  });
-  const result = runImport(cwd, { sourcePath });
-  const payload = {
-    threadId: result.threadId,
-    resumeCommand: result.resumeCommand ?? (result.threadId ? `grok -r ${result.threadId}` : null),
-    sourcePath,
-    sessionId: path.basename(sourcePath, ".jsonl"),
-    stdout: result.stdout
-  };
-
-  return {
-    payload,
-    rendered: renderTransferResult(payload)
-  };
-}
-
 function readTaskPrompt(cwd, options, positionals) {
   if (options["prompt-file"]) {
     return fs.readFileSync(path.resolve(cwd, options["prompt-file"]), "utf8");
@@ -617,7 +623,7 @@ async function runForegroundCommand(job, runner, options = {}) {
 }
 
 function spawnDetachedRunWorker(cwd, jobId) {
-  const scriptPath = path.join(ROOT_DIR, "scripts", "grok-bridge.mjs");
+  const scriptPath = path.join(ROOT_DIR, "scripts", "bridge.mjs");
   const child = spawn(process.execPath, [scriptPath, "run-worker", "--cwd", cwd, "--job-id", jobId], {
     cwd,
     env: process.env,
@@ -716,7 +722,7 @@ async function handleReviewCommand(argv, config) {
   };
 
   if (options.background && !options.wait) {
-    ensureGrokAvailable(cwd);
+    ensureAgentAvailable(cwd);
     const { payload } = enqueueBackgroundJob(cwd, job, request);
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
     return;
@@ -760,7 +766,7 @@ async function handleTask(argv) {
   });
 
   if (options.background) {
-    ensureGrokAvailable(cwd);
+    ensureAgentAvailable(cwd);
     requireTaskRequest(prompt, resumeLast);
 
     const job = buildTaskJob(workspaceRoot, taskMetadata, write);
@@ -797,19 +803,6 @@ async function handleTask(argv) {
       }),
     { json: options.json }
   );
-}
-
-async function handleTransfer(argv) {
-  const { options } = parseCommandInput(argv, {
-    valueOptions: ["cwd", "source"],
-    booleanOptions: ["json"]
-  });
-
-  const cwd = resolveCommandCwd(options);
-  const { payload, rendered } = await executeTransfer(cwd, {
-    source: options.source
-  });
-  outputCommandResult(payload, rendered, options.json);
 }
 
 async function readStoredJobWithRetry(workspaceRoot, jobId, options = {}) {
@@ -1070,9 +1063,6 @@ async function main() {
       break;
     case "run":
       await handleTask(argv);
-      break;
-    case "import":
-      await handleTransfer(argv);
       break;
     case "run-worker":
       await handleTaskWorker(argv);

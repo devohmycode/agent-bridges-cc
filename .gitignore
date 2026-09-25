@@ -58,3 +58,6 @@ dist
 .vite/
 
 output/
+
+# Test-only generated plugin
+tests/.generated/

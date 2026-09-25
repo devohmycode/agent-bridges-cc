@@ -6,7 +6,7 @@ export function ensureAbsolutePath(cwd, maybePath) {
   return path.isAbsolute(maybePath) ? maybePath : path.resolve(cwd, maybePath);
 }
 
-export function createTempDir(prefix = "grok-build-plugin-") {
+export function createTempDir(prefix = "agent-bridges-cc-") {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 

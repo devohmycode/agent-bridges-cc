@@ -1,3 +1,5 @@
+import { adapter, bridgeCommand } from "./adapter.mjs";
+
 function severityRank(severity) {
   switch (severity) {
     case "critical":
@@ -99,21 +101,21 @@ function escapeMarkdownCell(value) {
     .trim();
 }
 
-function formatGrokResumeCommand(job) {
+function formatResumeCommand(job) {
   if (!job?.threadId) {
     return null;
   }
-  return `grok -r ${job.threadId}`;
+  return adapter.resumeCommand(job.threadId);
 }
 
 function appendActiveJobsTable(lines, jobs) {
   lines.push("Active runs:");
-  lines.push("| Run | Kind | Status | Phase | Elapsed | Grok Session ID | Summary | Actions |");
+  lines.push(`| Run | Kind | Status | Phase | Elapsed | ${adapter.displayName} Session ID | Summary | Actions |`);
   lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const job of jobs) {
-    const actions = [`/grok-build:runs ${job.id}`];
+    const actions = [bridgeCommand("runs", job.id)];
     if (job.status === "queued" || job.status === "running") {
-      actions.push(`/grok-build:stop ${job.id}`);
+      actions.push(bridgeCommand("stop", job.id));
     }
     lines.push(
       `| ${escapeMarkdownCell(job.id)} | ${escapeMarkdownCell(job.kindLabel)} | ${escapeMarkdownCell(job.status)} | ${escapeMarkdownCell(job.phase ?? "")} | ${escapeMarkdownCell(job.elapsed ?? "")} | ${escapeMarkdownCell(job.threadId ?? "")} | ${escapeMarkdownCell(job.summary ?? "")} | ${actions.map((action) => `\`${action}\``).join("<br>")} |`
@@ -136,24 +138,24 @@ function pushJobDetails(lines, job, options = {}) {
     lines.push(`  Duration: ${job.duration}`);
   }
   if (job.threadId) {
-    lines.push(`  Grok session ID: ${job.threadId}`);
+    lines.push(`  ${adapter.displayName} session ID: ${job.threadId}`);
   }
-  const resumeCommand = formatGrokResumeCommand(job);
+  const resumeCommand = formatResumeCommand(job);
   if (resumeCommand) {
-    lines.push(`  Resume in Grok: ${resumeCommand}`);
+    lines.push(`  Resume in ${adapter.displayName}: ${resumeCommand}`);
   }
   if (job.logFile && options.showLog) {
     lines.push(`  Log: ${job.logFile}`);
   }
   if ((job.status === "queued" || job.status === "running") && options.showCancelHint) {
-    lines.push(`  Stop: /grok-build:stop ${job.id}`);
+    lines.push(`  Stop: ${bridgeCommand("stop", job.id)}`);
   }
   if (job.status !== "queued" && job.status !== "running" && options.showResultHint) {
-    lines.push(`  Show: /grok-build:show ${job.id}`);
+    lines.push(`  Show: ${bridgeCommand("show", job.id)}`);
   }
   if (job.status !== "queued" && job.status !== "running" && job.jobClass === "task" && job.write && options.showReviewHint) {
-    lines.push("  Review changes: /grok-build:review --wait");
-    lines.push("  Stricter pass: /grok-build:critique --wait");
+    lines.push(`  Review changes: ${bridgeCommand("review", "--wait")}`);
+    lines.push(`  Stricter pass: ${bridgeCommand("critique", "--wait")}`);
   }
   if (job.progressPreview?.length) {
     lines.push("  Progress:");
@@ -176,17 +178,22 @@ function appendReasoningSection(lines, reasoningSummary) {
 
 export function renderSetupReport(report) {
   const lines = [
-    "# Grok Build Check",
+    `# ${adapter.productName} Check`,
     "",
     `Status: ${report.ready ? "ready" : "needs attention"}`,
     "",
     "Checks:",
     `- node: ${report.node.detail}`,
-    `- grok: ${report.grok.detail}`,
+    `- ${adapter.cliName}: ${report.cli.detail}`,
     `- auth: ${report.auth.detail}`,
+    `- read-only mode: ${report.readOnly?.enforced === false ? "not enforced by the CLI" : "enforced by the CLI"}`,
     `- session runtime: ${report.sessionRuntime.label}`,
     ""
   ];
+
+  if (report.models) {
+    lines.push(`Models: ${report.models}`, "");
+  }
 
   if (report.actionsTaken?.length > 0) {
     lines.push("Actions taken:");
@@ -209,9 +216,9 @@ export function renderSetupReport(report) {
 export function renderReviewResult(parsedResult, meta) {
   if (!parsedResult.parsed) {
     const lines = [
-      `# Grok Build ${meta.reviewLabel}`,
+      `# ${adapter.productName} ${meta.reviewLabel}`,
       "",
-      "Grok did not return valid structured JSON.",
+      `${adapter.displayName} did not return valid structured JSON.`,
       "",
       `- Parse error: ${parsedResult.parseError}`
     ];
@@ -228,10 +235,10 @@ export function renderReviewResult(parsedResult, meta) {
   const validationError = validateReviewResultShape(parsedResult.parsed);
   if (validationError) {
     const lines = [
-      `# Grok Build ${meta.reviewLabel}`,
+      `# ${adapter.productName} ${meta.reviewLabel}`,
       "",
       `Target: ${meta.targetLabel}`,
-      "Grok returned JSON with an unexpected review shape.",
+      `${adapter.displayName} returned JSON with an unexpected review shape.`,
       "",
       `- Validation error: ${validationError}`
     ];
@@ -248,7 +255,7 @@ export function renderReviewResult(parsedResult, meta) {
   const data = normalizeReviewResultData(parsedResult.parsed);
   const findings = [...data.findings].sort((left, right) => severityRank(left.severity) - severityRank(right.severity));
   const lines = [
-    `# Grok Build ${meta.reviewLabel}`,
+    `# ${adapter.productName} ${meta.reviewLabel}`,
     "",
     `Target: ${meta.targetLabel}`,
     `Verdict: ${data.verdict}`,
@@ -287,7 +294,7 @@ export function renderNativeReviewResult(result, meta) {
   const stdout = String(result.stdout ?? "").trim();
   const stderr = String(result.stderr ?? "").trim();
   const lines = [
-    `# Grok Build ${meta.reviewLabel}`,
+    `# ${adapter.productName} ${meta.reviewLabel}`,
     "",
     `Target: ${meta.targetLabel}`,
     ""
@@ -296,9 +303,9 @@ export function renderNativeReviewResult(result, meta) {
   if (stdout) {
     lines.push(stdout);
   } else if (result.status === 0) {
-    lines.push("Grok review completed without any stdout output.");
+    lines.push(`${adapter.displayName} review completed without any output.`);
   } else {
-    lines.push("Grok review failed.");
+    lines.push(`${adapter.displayName} review failed.`);
   }
 
   if (stderr) {
@@ -316,13 +323,13 @@ export function renderTaskResult(parsedResult, meta) {
     return rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
   }
 
-  const message = String(parsedResult?.failureMessage ?? "").trim() || "Grok did not return a final message.";
+  const message = String(parsedResult?.failureMessage ?? "").trim() || `${adapter.displayName} did not return a final message.`;
   return `${message}\n`;
 }
 
 export function renderStatusReport(report) {
   const lines = [
-    "# Grok Build Runs",
+    `# ${adapter.productName} Runs`,
     "",
     `Session runtime: ${report.sessionRuntime.label}`,
     ""
@@ -367,7 +374,7 @@ export function renderStatusReport(report) {
 }
 
 export function renderJobStatusReport(job) {
-  const lines = ["# Grok Build Run Status", ""];
+  const lines = [`# ${adapter.productName} Run Status`, ""];
   pushJobDetails(lines, job, {
     showElapsed: job.status === "queued" || job.status === "running",
     showDuration: job.status !== "queued" && job.status !== "running",
@@ -381,25 +388,25 @@ export function renderJobStatusReport(job) {
 
 export function renderStoredJobResult(job, storedJob) {
   const threadId = storedJob?.threadId ?? job.threadId ?? null;
-  const resumeCommand = threadId ? `grok -r ${threadId}` : null;
+  const resumeCommand = threadId ? adapter.resumeCommand(threadId) : null;
   if (isStructuredReviewStoredResult(storedJob) && storedJob?.rendered) {
     const output = storedJob.rendered.endsWith("\n") ? storedJob.rendered : `${storedJob.rendered}\n`;
     if (!threadId) {
       return output;
     }
-    return `${output}\nGrok session ID: ${threadId}\nResume in Grok: ${resumeCommand}\n`;
+    return `${output}\n${adapter.displayName} session ID: ${threadId}\nResume in ${adapter.displayName}: ${resumeCommand}\n`;
   }
 
   const rawOutput =
     (typeof storedJob?.result?.rawOutput === "string" && storedJob.result.rawOutput) ||
-    (typeof storedJob?.result?.grok?.stdout === "string" && storedJob.result.grok.stdout) ||
+    (typeof storedJob?.result?.agent?.stdout === "string" && storedJob.result.agent.stdout) ||
     "";
   if (rawOutput) {
     const output = rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
     if (!threadId) {
       return output;
     }
-    return `${output}\nGrok session ID: ${threadId}\nResume in Grok: ${resumeCommand}\n`;
+    return `${output}\n${adapter.displayName} session ID: ${threadId}\nResume in ${adapter.displayName}: ${resumeCommand}\n`;
   }
 
   if (storedJob?.rendered) {
@@ -407,19 +414,19 @@ export function renderStoredJobResult(job, storedJob) {
     if (!threadId) {
       return output;
     }
-    return `${output}\nGrok session ID: ${threadId}\nResume in Grok: ${resumeCommand}\n`;
+    return `${output}\n${adapter.displayName} session ID: ${threadId}\nResume in ${adapter.displayName}: ${resumeCommand}\n`;
   }
 
   const lines = [
-    `# ${job.title ?? "Grok Build Result"}`,
+    `# ${job.title ?? `${adapter.productName} Result`}`,
     "",
     `Run: ${job.id}`,
     `Status: ${job.status}`
   ];
 
   if (threadId) {
-    lines.push(`Grok session ID: ${threadId}`);
-    lines.push(`Resume in Grok: ${resumeCommand}`);
+    lines.push(`${adapter.displayName} session ID: ${threadId}`);
+    lines.push(`Resume in ${adapter.displayName}: ${resumeCommand}`);
   }
 
   if (job.summary) {
@@ -440,7 +447,7 @@ export function renderStoredJobResult(job, storedJob) {
 export function renderCancelReport(job) {
   const delivered = job.cancelKill?.delivered ?? job.killDelivered;
   const lines = [
-    "# Grok Build Stop",
+    `# ${adapter.productName} Stop`,
     "",
     delivered === false
       ? `Stop requested for ${job.id}, but process kill was not confirmed.`
@@ -457,7 +464,7 @@ export function renderCancelReport(job) {
   if (delivered === false) {
     lines.push("- Kill delivered: false (process may still be running).");
   }
-  lines.push("- Check `/grok-build:runs` for the updated queue.");
+  lines.push(`- Check \`${bridgeCommand("runs")}\` for the updated queue.`);
 
   return `${lines.join("\n").trimEnd()}\n`;
 }

@@ -1,11 +1,11 @@
 ---
-description: Run a Grok Build critique that challenges the implementation approach and design choices
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--effort <low|medium|high>] [focus ...]'
+description: Run a {{PRODUCT}} critique that challenges the implementation approach and design choices
+argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <model>]{{EFFORT_ARG}} [focus ...]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
-Run a Grok Build critique through the plugin bridge.
+Run a {{PRODUCT}} critique through the plugin bridge.
 Position it as a challenge pass that questions the chosen implementation, design choices, tradeoffs, and assumptions.
 It is not just a stricter pass over implementation defects.
 
@@ -15,7 +15,7 @@ Raw slash-command arguments:
 Core constraint:
 - This command is review-only.
 - Do not fix issues, apply patches, or suggest that you are about to make changes.
-- Your only job is to run the critique and return Grok's output verbatim to the user.
+- Your only job is to run the critique and return {{NAME}}'s output verbatim to the user.
 - Keep the framing focused on whether the current approach is the right one, what assumptions it depends on, and where the design could fail under real-world conditions.
 
 Execution mode rules:
@@ -39,15 +39,15 @@ Argument handling:
 - Do not strip `--wait` or `--background` yourself.
 - Do not weaken the critique framing or rewrite the user's focus text.
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the bridge call; do not treat them as focus text.
-- Leave `--model` and `--effort` unset unless the user explicitly asks for them. Accepted effort values: `low`, `medium`, `high`.
-- The bridge script parses `--wait` and `--background`. Bridge `--background` owns the long-running process group (detached `run-worker` + grok agent). Claude Code's `Bash(..., run_in_background: true)` is only for the short enqueue call, not the long critique process.
-- `/grok-build:critique` uses the same review target selection as `/grok-build:review`.
-- Unlike `/grok-build:review`, `/grok-build:critique` can still take extra focus text after the flags.
+- Leave `--model` and `--effort` unset unless the user explicitly asks for them. {{EFFORT_VALUES}}
+- The bridge script parses `--wait` and `--background`. Bridge `--background` owns the long-running process group (detached `run-worker` + `{{CLI}}` child). Claude Code's `Bash(..., run_in_background: true)` is only for the short enqueue call, not the long critique process.
+- `/{{PLUGIN}}:critique` uses the same review target selection as `/{{PLUGIN}}:review`.
+- Unlike `/{{PLUGIN}}:review`, `/{{PLUGIN}}:critique` can still take extra focus text after the flags.
 
 Foreground flow:
 - Run:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/grok-bridge.mjs" critique "$ARGUMENTS"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" critique "$ARGUMENTS"
 ```
 - Return the command stdout verbatim, exactly as-is.
 - Do not paraphrase, summarize, or add commentary before or after it.
@@ -58,10 +58,10 @@ Background flow:
 - Launch with `Bash` (Claude may still use `run_in_background: true` for the short enqueue call; the long-running work is the bridge `run-worker`):
 ```typescript
 Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/grok-bridge.mjs" critique --background "$ARGUMENTS"`,
-  description: "Grok Build critique",
+  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" critique --background "$ARGUMENTS"`,
+  description: "{{PRODUCT}} critique",
   run_in_background: true
 })
 ```
 - Do not call `BashOutput` or wait for completion in this turn.
-- After launching the command, tell the user: "Grok Build critique started in the background. Check `/grok-build:runs` for progress. Stop with `/grok-build:stop`."
+- After launching the command, tell the user: "{{PRODUCT}} critique started in the background. Check `/{{PLUGIN}}:runs` for progress. Stop with `/{{PLUGIN}}:stop`."

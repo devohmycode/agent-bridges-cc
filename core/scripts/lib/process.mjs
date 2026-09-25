@@ -23,7 +23,8 @@ export function runCommand(command, args = [], options = {}) {
     maxBuffer: options.maxBuffer,
     stdio: options.stdio ?? "pipe",
     shell: options.shell ?? (process.platform === "win32" ? (process.env.SHELL || true) : false),
-    windowsHide: true
+    windowsHide: true,
+    windowsVerbatimArguments: options.windowsVerbatimArguments
   });
 
   const status = result.status == null ? (result.signal ? 1 : null) : result.status;
@@ -131,9 +132,11 @@ export function terminateProcessTree(pid, options = {}) {
   const graceMs = options.graceMs ?? 200;
 
   if (platform === "win32") {
+    // No shell: under Git Bash (SHELL set) MSYS rewrites "/PID" into a path.
     const result = runCommandImpl("taskkill", ["/PID", String(pid), "/T", "/F"], {
       cwd: options.cwd,
-      env: options.env
+      env: options.env,
+      shell: false
     });
 
     if (!result.error && result.status === 0) {

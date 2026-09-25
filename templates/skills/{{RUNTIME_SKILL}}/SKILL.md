@@ -1,24 +1,24 @@
 ---
-name: grok-delegate-runtime
-description: Internal helper contract for calling the grok-bridge runtime from Claude Code
+name: {{RUNTIME_SKILL}}
+description: Internal helper contract for calling the bridge runtime from Claude Code
 user-invocable: false
 ---
 
-# Grok Build Delegate Runtime
+# {{PRODUCT}} Delegate Runtime
 
-Use this skill only inside the `grok-build:grok-delegate` subagent.
+Use this skill only inside the `{{PLUGIN}}:{{AGENT}}` subagent.
 
 Primary helper:
-- `node "${CLAUDE_PLUGIN_ROOT}/scripts/grok-bridge.mjs" run "<raw arguments>"`
+- `node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" run "<raw arguments>"`
 
 Execution rules:
 - The delegate subagent is a forwarder, not an orchestrator. Its only job is to invoke `run` once and return that stdout unchanged.
-- Prefer the helper over hand-rolled `git`, direct Grok CLI strings, or any other Bash activity.
-- Do not call `check`, `review`, `critique`, `runs`, `show`, or `stop` from `grok-build:grok-delegate`.
+- Prefer the helper over hand-rolled `git`, direct {{NAME}} CLI strings, or any other Bash activity.
+- Do not call `check`, `review`, `critique`, `runs`, `show`, or `stop` from `{{PLUGIN}}:{{AGENT}}`.
 - Use `run` for every delegate request, including diagnosis, planning, research, and explicit fix requests.
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
-- Default to a write-capable Grok run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
+- Default to a write-capable {{NAME}} run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 
 Command selection:
 - Use exactly one `run` invocation per delegate handoff.
@@ -29,12 +29,12 @@ Command selection:
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
 - `--resume`: always use `run --resume-last`, even if the request text is ambiguous.
 - `--fresh`: always use a fresh `run`, even if the request sounds like a follow-up.
-- `--effort`: accepted values are `low`, `medium`, `high`.
+- {{EFFORT_VALUES}}
 - `run --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous delegate run.
 
 Safety rules:
-- Default to write-capable Grok work in `grok-build:grok-delegate` unless the user explicitly asks for read-only behavior.
+- Default to write-capable {{NAME}} work in `{{PLUGIN}}:{{AGENT}}` unless the user explicitly asks for read-only behavior.
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, stop runs, summarize output, or do any follow-up work of your own.
 - Return the stdout of the `run` command exactly as-is.
-- If the Bash call fails or Grok cannot be invoked, return nothing.
+- If the Bash call fails or {{NAME}} cannot be invoked, return nothing.

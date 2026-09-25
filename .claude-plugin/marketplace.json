@@ -1,0 +1,83 @@
+{
+  "name": "agent-bridges",
+  "owner": {
+    "name": "DevOhMyCode"
+  },
+  "metadata": {
+    "description": "Claude Code bridge plugins for Codex, Grok Build, Cursor, Devin, GitHub Copilot, Antigravity and Warp Oz: review, critique, and delegation.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "codex",
+      "description": "Official OpenAI Codex plugin: review, adversarial review, rescue delegation and session transfer through the Codex app server.",
+      "author": {
+        "name": "OpenAI"
+      },
+      "homepage": "https://github.com/openai/codex-plugin-cc",
+      "source": {
+        "source": "git-subdir",
+        "url": "openai/codex-plugin-cc",
+        "path": "plugins/codex"
+      }
+    },
+    {
+      "name": "grok-build",
+      "description": "Official xAI Grok Build plugin: review, critique, delegation and Claude session import through the grok CLI.",
+      "author": {
+        "name": "xAI"
+      },
+      "homepage": "https://github.com/xai-org/grok-build-plugin-cc",
+      "source": {
+        "source": "git-subdir",
+        "url": "xai-org/grok-build-plugin-cc",
+        "path": "plugins/grok-build"
+      }
+    },
+    {
+      "name": "antigravity-bridge",
+      "description": "Antigravity CLI ↔ Claude Code bridge for review, critique, and delegation.",
+      "version": "0.1.0",
+      "author": {
+        "name": "DevOhMyCode"
+      },
+      "source": "./plugins/antigravity-bridge"
+    },
+    {
+      "name": "copilot-bridge",
+      "description": "GitHub Copilot CLI ↔ Claude Code bridge for review, critique, and delegation.",
+      "version": "0.1.0",
+      "author": {
+        "name": "DevOhMyCode"
+      },
+      "source": "./plugins/copilot-bridge"
+    },
+    {
+      "name": "cursor-bridge",
+      "description": "Cursor Agent ↔ Claude Code bridge for review, critique, and delegation.",
+      "version": "0.1.0",
+      "author": {
+        "name": "DevOhMyCode"
+      },
+      "source": "./plugins/cursor-bridge"
+    },
+    {
+      "name": "devin-bridge",
+      "description": "Devin CLI ↔ Claude Code bridge for review, critique, and delegation.",
+      "version": "0.1.0",
+      "author": {
+        "name": "DevOhMyCode"
+      },
+      "source": "./plugins/devin-bridge"
+    },
+    {
+      "name": "warp-bridge",
+      "description": "Warp Oz ↔ Claude Code bridge for review, critique, and delegation.",
+      "version": "0.1.0",
+      "author": {
+        "name": "DevOhMyCode"
+      },
+      "source": "./plugins/warp-bridge"
+    }
+  ]
+}

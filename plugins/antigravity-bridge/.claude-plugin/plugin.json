@@ -1,0 +1,8 @@
+{
+  "name": "antigravity-bridge",
+  "version": "0.1.0",
+  "description": "Antigravity CLI ↔ Claude Code bridge for review, critique, and delegation.",
+  "author": {
+    "name": "DevOhMyCode"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "agent-bridges-cc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Claude Code bridge plugins for Cursor, Devin, GitHub Copilot, Antigravity and Warp Oz.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check-build": "node scripts/build.mjs --check",
+    "bump-version": "node scripts/bump-version.mjs",
+    "check-version": "node scripts/bump-version.mjs --check",
+    "test": "node tests/setup.mjs && node --test tests/*.test.mjs"
+  }
+}

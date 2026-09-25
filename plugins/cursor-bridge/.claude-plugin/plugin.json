@@ -1,0 +1,8 @@
+{
+  "name": "cursor-bridge",
+  "version": "0.1.0",
+  "description": "Cursor Agent ↔ Claude Code bridge for review, critique, and delegation.",
+  "author": {
+    "name": "DevOhMyCode"
+  }
+}

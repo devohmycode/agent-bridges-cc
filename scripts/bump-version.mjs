@@ -1,56 +1,14 @@
 #!/usr/bin/env node
+// package.json holds the release version. `npm run build` copies it into every
+// generated plugin.json and the marketplace; this script sets it and keeps
+// those generated manifests in step (or checks that they are).
+// External marketplace entries (codex, grok-build) carry no version: they
+// track their upstream repositories.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-
-const TARGETS = [
-  {
-    file: "package.json",
-    values: [
-      {
-        label: "version",
-        get: (json) => json.version,
-        set: (json, version) => {
-          json.version = version;
-        }
-      }
-    ]
-  },
-  {
-    file: "plugins/grok-build/.claude-plugin/plugin.json",
-    values: [
-      {
-        label: "version",
-        get: (json) => json.version,
-        set: (json, version) => {
-          json.version = version;
-        }
-      }
-    ]
-  },
-  {
-    file: ".claude-plugin/marketplace.json",
-    values: [
-      {
-        label: "metadata.version",
-        get: (json) => json.metadata?.version,
-        set: (json, version) => {
-          requireObject(json.metadata, ".claude-plugin/marketplace.json metadata");
-          json.metadata.version = version;
-        }
-      },
-      {
-        label: "plugins[grok-build].version",
-        get: (json) => findMarketplacePlugin(json).version,
-        set: (json, version) => {
-          findMarketplacePlugin(json).version = version;
-        }
-      }
-    ]
-  }
-];
 
 function usage() {
   return [
@@ -61,115 +19,72 @@ function usage() {
     "Options:",
     "  --check       Verify manifest versions. Uses package.json when version is omitted.",
     "  --root <dir>  Run against a different repository root.",
-    "  --help       Print this help."
+    "  --help        Print this help."
   ].join("\n");
 }
 
 function parseArgs(argv) {
-  const options = {
-    check: false,
-    root: process.cwd(),
-    version: null
-  };
-
+  const options = { check: false, root: process.cwd(), version: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-
     if (arg === "--check") {
       options.check = true;
     } else if (arg === "--root") {
-      const root = argv[i + 1];
-      if (!root) {
-        throw new Error("--root requires a directory.");
-      }
-      options.root = root;
-      i += 1;
+      options.root = argv[++i];
+      if (!options.root) throw new Error("--root requires a directory.");
     } else if (arg === "--help" || arg === "-h") {
       options.help = true;
-    } else if (arg.startsWith("-")) {
-      throw new Error(`Unknown option: ${arg}`);
-    } else if (options.version) {
-      throw new Error(`Unexpected extra argument: ${arg}`);
-    } else {
+    } else if (!arg.startsWith("-") && !options.version) {
       options.version = arg;
+    } else {
+      throw new Error(`Unexpected argument: ${arg}`);
     }
   }
-
-  options.root = path.resolve(options.root);
   return options;
 }
 
-function validateVersion(version) {
-  if (!VERSION_PATTERN.test(version)) {
-    throw new Error(`Expected a semver-like version such as 0.1.0, got: ${version}`);
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function writeJson(file, json) {
+  fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+}
+
+/** Every manifest field that must equal the package version. */
+function versionFields(root) {
+  const fields = [{ file: "package.json", label: "version", get: (j) => j.version, set: (j, v) => (j.version = v) }];
+  const marketplaceFile = ".claude-plugin/marketplace.json";
+  if (!fs.existsSync(path.join(root, marketplaceFile))) {
+    return fields;
   }
-}
-
-function requireObject(value, label) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label} to be an object.`);
-  }
-}
-
-function findMarketplacePlugin(json) {
-  const plugin = json.plugins?.find((entry) => entry?.name === "grok-build");
-  requireObject(plugin, ".claude-plugin/marketplace.json plugins[grok-build]");
-  return plugin;
-}
-
-function readJson(root, file) {
-  const filePath = path.join(root, file);
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
-function writeJson(root, file, json) {
-  const filePath = path.join(root, file);
-  fs.writeFileSync(filePath, `${JSON.stringify(json, null, 2)}\n`);
-}
-
-function readPackageVersion(root) {
-  const packageJson = readJson(root, "package.json");
-  if (typeof packageJson.version !== "string") {
-    throw new Error("package.json version must be a string.");
-  }
-  validateVersion(packageJson.version);
-  return packageJson.version;
-}
-
-function checkVersions(root, expectedVersion) {
-  const mismatches = [];
-
-  for (const target of TARGETS) {
-    const json = readJson(root, target.file);
-    for (const value of target.values) {
-      const actual = value.get(json);
-      if (actual !== expectedVersion) {
-        mismatches.push(`${target.file} ${value.label}: expected ${expectedVersion}, found ${actual ?? "<missing>"}`);
+  const marketplace = readJson(path.join(root, marketplaceFile));
+  fields.push({
+    file: marketplaceFile,
+    label: "metadata.version",
+    get: (j) => j.metadata?.version,
+    set: (j, v) => {
+      j.metadata = { ...(j.metadata ?? {}), version: v };
+    }
+  });
+  for (const entry of marketplace.plugins ?? []) {
+    if (typeof entry.source !== "string") {
+      continue;
+    }
+    fields.push({
+      file: marketplaceFile,
+      label: `plugins[${entry.name}].version`,
+      get: (j) => j.plugins.find((p) => p.name === entry.name)?.version,
+      set: (j, v) => {
+        j.plugins.find((p) => p.name === entry.name).version = v;
       }
+    });
+    const manifest = path.posix.join(entry.source.replace(/^\.\//, ""), ".claude-plugin", "plugin.json");
+    if (fs.existsSync(path.join(root, manifest))) {
+      fields.push({ file: manifest, label: "version", get: (j) => j.version, set: (j, v) => (j.version = v) });
     }
   }
-
-  return mismatches;
-}
-
-function bumpVersion(root, version) {
-  const changedFiles = [];
-
-  for (const target of TARGETS) {
-    const json = readJson(root, target.file);
-    const before = JSON.stringify(json);
-
-    for (const value of target.values) {
-      value.set(json, version);
-    }
-
-    if (JSON.stringify(json) !== before) {
-      writeJson(root, target.file, json);
-      changedFiles.push(target.file);
-    }
-  }
-
-  return changedFiles;
+  return fields;
 }
 
 function main() {
@@ -178,30 +93,43 @@ function main() {
     console.log(usage());
     return;
   }
-
-  const version = options.version ?? (options.check ? readPackageVersion(options.root) : null);
-  if (!version) {
-    throw new Error(`Missing version.\n\n${usage()}`);
-  }
-  validateVersion(version);
+  const root = path.resolve(options.root);
+  const fields = versionFields(root);
 
   if (options.check) {
-    const mismatches = checkVersions(options.root, version);
-    if (mismatches.length > 0) {
-      throw new Error(`Version metadata is out of sync:\n${mismatches.join("\n")}`);
+    const expected = options.version ?? readJson(path.join(root, "package.json")).version;
+    const stale = fields
+      .map((field) => ({ ...field, actual: field.get(readJson(path.join(root, field.file))) }))
+      .filter((field) => field.actual !== expected);
+    if (stale.length > 0) {
+      for (const field of stale) {
+        process.stderr.write(`${field.file} ${field.label} is ${field.actual ?? "missing"}, expected ${expected}\n`);
+      }
+      process.exitCode = 1;
+      return;
     }
-    console.log(`All version metadata matches ${version}.`);
+    console.log(`All manifests are at ${expected}.`);
     return;
   }
 
-  const changedFiles = bumpVersion(options.root, version);
-  const touched = changedFiles.length > 0 ? changedFiles.join(", ") : "no files changed";
-  console.log(`Set version metadata to ${version}: ${touched}.`);
+  if (!options.version || !VERSION_PATTERN.test(options.version)) {
+    throw new Error(`Provide a semantic version.\n${usage()}`);
+  }
+  const byFile = new Map();
+  for (const field of fields) {
+    const json = byFile.get(field.file) ?? readJson(path.join(root, field.file));
+    field.set(json, options.version);
+    byFile.set(field.file, json);
+  }
+  for (const [file, json] of byFile) {
+    writeJson(path.join(root, file), json);
+  }
+  console.log(`Set version ${options.version} in ${[...byFile.keys()].join(", ")}.`);
 }
 
 try {
   main();
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
+  process.stderr.write(`${error.message}\n`);
   process.exitCode = 1;
 }

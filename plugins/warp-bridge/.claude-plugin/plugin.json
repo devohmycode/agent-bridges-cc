@@ -1,0 +1,8 @@
+{
+  "name": "warp-bridge",
+  "version": "0.1.0",
+  "description": "Warp Oz ↔ Claude Code bridge for review, critique, and delegation.",
+  "author": {
+    "name": "DevOhMyCode"
+  }
+}

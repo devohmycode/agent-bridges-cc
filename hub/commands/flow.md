@@ -10,10 +10,14 @@ Run a Bridges Hub workflow. Each step runs through an installed bridge plugin; s
 Raw slash-command arguments:
 `$ARGUMENTS`
 
+- The arguments go through stdin in a quoted heredoc (`<<'BRIDGE_ARGS'`), never inside the command line: the shell then expands nothing in them (`$(...)`, backticks, quotes). Keep the delimiter quoted and on its own line.
+
 1. Always preview first, in the foreground:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" flow "--dry-run $ARGUMENTS"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" flow --dry-run --args-stdin <<'BRIDGE_ARGS'
+   $ARGUMENTS
+   BRIDGE_ARGS
    ```
 
    - If it fails (unknown workflow, invalid file, missing `--var` or task, provider not installed), show the error and stop. Suggest `/bridges-hub:list workflows` or `/bridges-hub:check` when relevant.
@@ -29,12 +33,14 @@ Raw slash-command arguments:
    - Background:
      ```typescript
      Bash({
-       command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" flow "--background $ARGUMENTS"`,
+       command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" flow --background --args-stdin <<'BRIDGE_ARGS'
+$ARGUMENTS
+BRIDGE_ARGS`,
        description: "Bridges Hub workflow",
        run_in_background: true
      })
      ```
      Then tell the user: "Workflow started in the background. Check `/bridges-hub:runs` for progress and `/bridges-hub:show` for the report. Stop with `/bridges-hub:stop`."
-   - Foreground: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" flow "$ARGUMENTS"` with a 600000 ms timeout, then present the report following the `hub-run-output` skill.
+   - Foreground: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" flow --args-stdin <<'BRIDGE_ARGS'` (then `$ARGUMENTS`, then `BRIDGE_ARGS`, each on its own line) with a 600000 ms timeout, then present the report following the `hub-run-output` skill.
 
 Do not fix anything the steps report unless the user asks you to.

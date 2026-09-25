@@ -9,7 +9,8 @@ user-invocable: false
 Use this skill only inside the `copilot-bridge:copilot-delegate` subagent.
 
 Primary helper:
-- `node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" run "<raw arguments>"`
+- `node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" run [flags] <<'BRIDGE_TASK'` followed by the task text on the next lines and `BRIDGE_TASK` alone on the last line.
+- Flags (`--write`, `--background`, `--resume-last`, `--model`, `--effort`) go on the command line; the task text goes only in the heredoc, which `run` reads as the prompt verbatim. Never put the task text inside the command line: the shell would expand `$(...)`, backticks and quotes in it. Keep the delimiter quoted.
 
 Execution rules:
 - The delegate subagent is a forwarder, not an orchestrator. Its only job is to invoke `run` once and return that stdout unchanged.

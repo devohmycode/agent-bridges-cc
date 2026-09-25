@@ -153,6 +153,31 @@ test("a quoted $ARGUMENTS string after the command's own flags is still split", 
   assert.equal(runArgv[1], "make the change");
 });
 
+test("commands pass $ARGUMENTS through stdin, where nothing is expanded", () => {
+  const { env, log } = setup();
+  const repo = reviewableRepo();
+  const critique = runBridge(["critique", "--json", "--args-stdin"], {
+    cwd: repo,
+    env: env(),
+    input: "--model fake-model check l'auth $(touch pwned) `id`\n"
+  });
+  assert.equal(critique.status, 0, critique.stderr);
+  const argv = lastPrintArgv(log);
+  assert.equal(argv[argv.indexOf("--model") + 1], "fake-model");
+  assert.ok(argv[1].includes("check l'auth $(touch pwned) `id`"), argv[1]);
+  assert.equal(fs.existsSync(path.join(repo, "pwned")), false);
+
+  // The delegate hands its task over as the prompt itself, verbatim.
+  const writable = setup();
+  const run = runBridge(["run", "--write"], {
+    cwd: repo,
+    env: writable.env(),
+    input: 'fix "quoted" and $(x)\nsecond line\n'
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(lastPrintArgv(writable.log)[1].includes('fix "quoted" and $(x)\nsecond line'));
+});
+
 test("review rejects effort values the provider does not list", () => {
   const { env } = setup();
   const repo = reviewableRepo();

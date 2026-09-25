@@ -6,7 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { expandRawArguments, parseArgs } from "./lib/args.mjs";
+import { parseArgs, resolveArguments } from "./lib/args.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { adapter, bridgeCommand } from "./lib/adapter.mjs";
@@ -121,7 +121,7 @@ function normalizeReasoningEffort(effort) {
 
 
 function parseCommandInput(argv, config = {}) {
-  const parsed = parseArgs(expandRawArguments(argv, config.valueOptions), {
+  const parsed = parseArgs(resolveArguments(argv, config.valueOptions, readStdinIfPiped), {
     ...config,
     unknownMode: config.unknownMode ?? "warn",
     aliasMap: {

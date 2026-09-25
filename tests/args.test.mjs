@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { expandRawArguments, parseArgs, splitRawArgumentString } from "./.generated/plugins/fake-bridge/scripts/lib/args.mjs";
+import { expandRawArguments, parseArgs, resolveArguments, splitRawArgumentString } from "./.generated/plugins/fake-bridge/scripts/lib/args.mjs";
 
 test("parseArgs handles value, boolean, and alias options", () => {
   const result = parseArgs(["--cwd", "/tmp", "--json", "-m", "model-x", "remaining"], {
@@ -64,4 +64,38 @@ test("expandRawArguments leaves structured argv and option values whole", () => 
     "C:/Temp Dir/p.md"
   ]);
   assert.deepEqual(expandRawArguments(["--json", "single"]), ["--json", "single"]);
+});
+
+test("splitRawArgumentString keeps apostrophes inside words and Windows backslashes", () => {
+  assert.deepEqual(splitRawArgumentString(`check l'auth, don't "stop here" now`), [
+    "check",
+    "l'auth,",
+    "don't",
+    "stop here",
+    "now"
+  ]);
+  assert.deepEqual(splitRawArgumentString(String.raw`--cwd C:\Users\me\repo keep\ going`), [
+    "--cwd",
+    String.raw`C:\Users\me\repo`,
+    "keep going"
+  ]);
+});
+
+test("resolveArguments replaces --args-stdin with the tokens read from stdin, unexpanded", () => {
+  const stdin = "--base HEAD~1 focus on $(whoami) and `id`\n";
+  assert.deepEqual(resolveArguments(["--background", "--args-stdin"], ["base"], () => stdin), [
+    "--background",
+    "--base",
+    "HEAD~1",
+    "focus",
+    "on",
+    "$(whoami)",
+    "and",
+    "`id`"
+  ]);
+  assert.deepEqual(resolveArguments(["--args-stdin"], [], () => "\n"), []);
+  const noStdin = () => {
+    throw new Error("stdin must not be read without --args-stdin");
+  };
+  assert.deepEqual(resolveArguments(["--json", "x y"], [], noStdin), ["--json", "x", "y"]);
 });

@@ -10,18 +10,21 @@ Run one provider through its bridge plugin, with a profile giving it a role (for
 Raw slash-command arguments:
 `$ARGUMENTS`
 
+- The arguments go through stdin in a quoted heredoc (`<<'BRIDGE_ARGS'`), never inside the command line: the shell then expands nothing in them (`$(...)`, backticks, quotes). Keep the delimiter quoted and on its own line.
 - The first argument is the provider: `cursor`, `devin`, `copilot`, `antigravity`, `warp`, `codex` or `grok-build`.
 - If the provider or the task is missing, ask for it with `AskUserQuestion` (offer the profiles from `/bridges-hub:list profiles` when the user seems to want a role). Do not guess the task.
 - The run is read-only unless `--write` is passed or the profile's mode is `write`. A profile from the repository's `.claude/bridges-hub/profiles` with `mode: write` is refused without `--write`. When it will write, say so before running.
 - With `--background`:
   ```typescript
   Bash({
-    command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" ask "$ARGUMENTS"`,
+    command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" ask --args-stdin <<'BRIDGE_ARGS'
+$ARGUMENTS
+BRIDGE_ARGS`,
     description: "Bridges Hub ask",
     run_in_background: true
   })
   ```
   Then point the user to `/bridges-hub:runs` and `/bridges-hub:show`.
-- Otherwise run `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" ask "$ARGUMENTS"` in the foreground with a 600000 ms timeout.
+- Otherwise run `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" ask --args-stdin <<'BRIDGE_ARGS'` (then `$ARGUMENTS`, then `BRIDGE_ARGS`, each on its own line) in the foreground with a 600000 ms timeout.
 
 Present the result following the `hub-run-output` skill. Do not act on it unless the user asks.

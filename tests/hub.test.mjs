@@ -430,3 +430,15 @@ test("list hides _partial profiles unless --all, and validate warns about long p
   assert.equal(validated.status, 0, validated.stderr);
   assert.match(validated.stdout, /Warnings:\n- profile `huge`: \d+ characters/);
 });
+
+test("flow reads its arguments from stdin with --args-stdin, unexpanded", () => {
+  const { repo, env, prompts } = hubSetup();
+  const result = run(process.execPath, [HUB_SCRIPT, "flow", "--json", "--args-stdin"], {
+    cwd: repo,
+    env,
+    input: "--var target=api chain check l'auth $(touch pwned)\n"
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(prompts()[0][1], /Plan check l'auth \$\(touch pwned\) for api/);
+  assert.equal(fs.existsSync(path.join(repo, "pwned")), false);
+});

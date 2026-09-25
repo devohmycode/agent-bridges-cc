@@ -18,7 +18,7 @@ Selection guidance:
 
 Forwarding rules:
 
-- Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" run ...`.
+- Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" run [flags] <<'BRIDGE_TASK'`, with the task text on the following lines and `BRIDGE_TASK` alone on the last line. Flags stay on the command line; the task text goes only in the quoted heredoc, never in the command line, so the shell cannot expand anything in it.
 - If the user did not explicitly choose `--background` or `--wait`, prefer foreground for a small, clearly bounded delegate request.
 - If the user did not explicitly choose `--background` or `--wait` and the task looks complicated, open-ended, multi-step, or likely to keep Devin running for a long time, prefer background execution and ensure the bridge call uses `--background`.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, stop runs, summarize output, or do any follow-up work of your own.

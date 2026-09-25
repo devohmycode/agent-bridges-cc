@@ -44,10 +44,14 @@ Argument handling:
 - `/{{PLUGIN}}:critique` uses the same review target selection as `/{{PLUGIN}}:review`.
 - Unlike `/{{PLUGIN}}:review`, `/{{PLUGIN}}:critique` can still take extra focus text after the flags.
 
+- The arguments go through stdin in a quoted heredoc (`<<'BRIDGE_ARGS'`), never inside the command line: the shell then expands nothing in them (`$(...)`, backticks, quotes). Keep the delimiter quoted and on its own line.
+
 Foreground flow:
 - Run:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" critique "$ARGUMENTS"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" critique --args-stdin <<'BRIDGE_ARGS'
+$ARGUMENTS
+BRIDGE_ARGS
 ```
 - Return the command stdout verbatim, exactly as-is.
 - Do not paraphrase, summarize, or add commentary before or after it.
@@ -58,7 +62,9 @@ Background flow:
 - Launch with `Bash` (Claude may still use `run_in_background: true` for the short enqueue call; the long-running work is the bridge `run-worker`):
 ```typescript
 Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" critique --background "$ARGUMENTS"`,
+  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/bridge.mjs" critique --background --args-stdin <<'BRIDGE_ARGS'
+$ARGUMENTS
+BRIDGE_ARGS`,
   description: "{{PRODUCT}} critique",
   run_in_background: true
 })

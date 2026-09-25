@@ -97,12 +97,14 @@ export function splitRawArgumentString(raw) {
 
   for (const character of raw) {
     if (escaping) {
-      current += character;
+      current += /[\s'"\\]/.test(character) ? character : `\\${character}`;
       escaping = false;
       continue;
     }
 
-    if (character === "\\") {
+    // A backslash only escapes what the splitter would otherwise act on, so
+    // Windows paths (C:\Users\me) keep theirs.
+    if (character === "\\" && !quote) {
       escaping = true;
       continue;
     }
@@ -116,7 +118,9 @@ export function splitRawArgumentString(raw) {
       continue;
     }
 
-    if (character === "'" || character === "\"") {
+    // Quotes group words only at the start of a token: the apostrophe in
+    // "l'auth" or "don't" stays text.
+    if ((character === "'" || character === "\"") && current === "") {
       quote = character;
       continue;
     }
@@ -171,4 +175,23 @@ export function expandRawArguments(argv, valueOptions = []) {
     return argv;
   }
   return [...leading, ...splitRawArgumentString(raw)];
+}
+
+/**
+ * Commands pass free text through stdin, in a quoted heredoc, so the shell
+ * never expands it (`$(…)`, backticks, quotes):
+ *   node bridge.mjs review --args-stdin <<'ARGS'
+ *   $ARGUMENTS
+ *   ARGS
+ * `--args-stdin` is replaced by the tokens read from stdin.
+ */
+export const ARGS_STDIN_FLAG = "--args-stdin";
+
+export function resolveArguments(argv, valueOptions = [], readStdin = () => "") {
+  const index = argv.indexOf(ARGS_STDIN_FLAG);
+  if (index === -1) {
+    return expandRawArguments(argv, valueOptions);
+  }
+  const rest = [...argv.slice(0, index), ...argv.slice(index + 1)];
+  return [...expandRawArguments(rest, valueOptions), ...splitRawArgumentString(readStdin() ?? "")];
 }

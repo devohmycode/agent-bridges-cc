@@ -8,7 +8,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { expandRawArguments, parseArgs } from "./lib/args.mjs";
+import { parseArgs, resolveArguments } from "./lib/args.mjs";
+import { readStdinIfPiped } from "./lib/fs.mjs";
 import { loadCatalog, loadFile, resolveProfile } from "./lib/catalog.mjs";
 import { buildSingleJobSnapshot, buildStatusSnapshot, readStoredJob, resolveCancelableJob, resolveResultJob } from "./lib/job-control.mjs";
 import { terminateProcessTree } from "./lib/process.mjs";
@@ -66,7 +67,7 @@ function output(value, asJson) {
  */
 function parseInput(argv, config = {}) {
   const valueOptions = ["cwd", ...(config.valueOptions ?? [])];
-  const tokens = expandRawArguments(argv, valueOptions);
+  const tokens = resolveArguments(argv, valueOptions, readStdinIfPiped);
   const takesValue = new Set([...valueOptions.map((name) => `--${name}`), "-C", "-m"]);
   const vars = {};
   const rest = [];

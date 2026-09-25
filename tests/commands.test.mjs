@@ -101,7 +101,16 @@ for (const entry of BRIDGE_PLUGINS) {
 
     const runtimeSkill = read(`skills/${id}-delegate-runtime/SKILL.md`);
     assert.match(runtimeSkill, new RegExp(`^name: ${id}-delegate-runtime$`, "m"));
-    assert.match(runtimeSkill, /bridge\.mjs" run "<raw arguments>"/);
+    assert.match(runtimeSkill, /bridge\.mjs" run \[flags\] <<'BRIDGE_TASK'/);
+    assert.match(agent, /<<'BRIDGE_TASK'/);
+    for (const command of ["review", "critique"]) {
+      const source = read(`commands/${command}.md`);
+      assert.ok(
+        source.includes(`bridge.mjs" ${command} --args-stdin <<'BRIDGE_ARGS'\n$ARGUMENTS\nBRIDGE_ARGS`),
+        `${command}.md passes $ARGUMENTS through a quoted heredoc`
+      );
+      assert.ok(!source.includes('"$ARGUMENTS"'), `${command}.md must not quote $ARGUMENTS on the command line`);
+    }
 
     const outputSkill = read(`skills/${id}-run-output/SKILL.md`);
     assert.match(outputSkill, new RegExp(`^name: ${id}-run-output$`, "m"));
@@ -138,7 +147,14 @@ test("bridges-hub: manifest, commands, skill, built-ins and hooks are consistent
     assert.ok(frontmatter(source), `${path.basename(file)} should start with frontmatter`);
     assert.match(source, /scripts\/hub\.mjs"/, `${path.basename(file)} routes through hub.mjs`);
   }
-  assert.match(read("commands/flow.md"), /--dry-run \$ARGUMENTS/);
+  assert.match(read("commands/flow.md"), /flow --dry-run --args-stdin <<'BRIDGE_ARGS'/);
+  for (const command of ["flow", "ask"]) {
+    assert.doesNotMatch(
+      read(`commands/${command}.md`),
+      /"[^"\n]*\$ARGUMENTS[^"\n]*"/,
+      `${command}.md must not put $ARGUMENTS inside a quoted command line`
+    );
+  }
   assert.match(read("commands/flow.md"), /run_in_background:\s*true/);
 
   assert.ok(fs.readdirSync(path.join(pluginRoot, "profiles")).includes("security-review.md"));

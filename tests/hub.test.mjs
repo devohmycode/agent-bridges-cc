@@ -302,11 +302,12 @@ test("stop cancels a running workflow and kills its step", async () => {
   const { jobId } = JSON.parse(queued.stdout);
 
   let job = null;
-  for (let attempt = 0; attempt < 150 && !job?.agentPid; attempt += 1) {
+  for (let attempt = 0; attempt < 150 && !job?.agentPid && !["failed", "completed"].includes(job?.status); attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 200));
     job = JSON.parse(hub(["runs", jobId, "--json"]).stdout).job;
   }
-  assert.ok(job?.agentPid, "the first step started");
+  assert.ok(job?.agentPid, `the first step started: ${JSON.stringify(job)}
+${job?.logFile ? fs.readFileSync(job.logFile, "utf8") : ""}`);
 
   const stopped = hub(["stop", jobId, "--json"]);
   assert.equal(stopped.status, 0, stopped.stderr);
@@ -322,4 +323,93 @@ test("validate flags an invalid project workflow", () => {
   const result = hub(["validate", "broken"]);
   assert.equal(result.status, 1);
   assert.match(result.stdout, /unknown step `ghost`/);
+});
+
+// ------------------------------------------------ extends, include, defaults
+
+function layered() {
+  const configDir = makeTempDir();
+  const workspaceRoot = makeTempDir();
+  const user = (name, text) => write(path.join(configDir, "bridges-hub", "profiles", `${name}.md`), text);
+  const project = (name, text) => write(path.join(workspaceRoot, ".claude", "bridges-hub", "profiles", `${name}.md`), text);
+  const load = () => loadCatalog("profiles", { workspaceRoot, env: { CLAUDE_CONFIG_DIR: configDir } });
+  return { user, project, load };
+}
+
+test("extends merges an overlay into the broader profile of the same name, section by section", () => {
+  const { user, project, load } = layered();
+  user("scan", "---\nmode: read\nexclude: dist/**\nvars: lang=en\n---\nGeneric intro.\n\n## Triage\n\nNever report style.\n\n## Report\n\nTable.");
+  project("scan", "---\nextends: scan\nexclude: vendor/**\nvars: lang=fr\n---\nThis repo is decker.\n\n## Triage\n\nNever report the mirror.\n\n## Extra\n\nOnly here.");
+
+  const { items, problems } = load();
+  assert.deepEqual(problems, []);
+  const scan = items.get("scan");
+  assert.equal(scan.source, "project");
+  assert.equal(scan.extended, true);
+  assert.equal(scan.mode, "read");
+  assert.deepEqual(scan.exclude, ["dist/**", "vendor/**"]);
+  assert.deepEqual(scan.vars, { lang: "fr" });
+  assert.match(scan.body, /^Generic intro\.\n\nProject-specific \(takes precedence over the guidance above\):\nThis repo is decker\./);
+  assert.match(scan.body, /## Triage\n\nNever report style\.\n\nProject-specific[^\n]*\nNever report the mirror\./);
+  assert.match(scan.body, /## Report\n\nTable\.\n\n## Extra\n\nOnly here\.$/);
+});
+
+test("include appends a whole profile or one section, and cycles are reported", () => {
+  const { project, load } = layered();
+  project("_common", "---\ndescription: shared\n---\n## Remediation\n\nOne commit per finding.\n\n## Language\n\nFrench.");
+  project("fix", "---\ninclude: _common#remediation, implementer\n---\nFix it.");
+  project("loop-a", "---\ninclude: loop-b\n---\nA");
+  project("loop-b", "---\ninclude: loop-a\n---\nB");
+
+  const { items, problems } = load();
+  const fix = items.get("fix").body;
+  assert.match(fix, /^Fix it\.\n\n## Remediation\n\nOne commit per finding\.\n\nYou are a careful senior engineer/);
+  assert.doesNotMatch(fix, /French/);
+  assert.ok(problems.some((problem) => /cycle/.test(problem.message)));
+  assert.ok(!items.has("loop-a"));
+});
+
+test("extends reports a missing base", () => {
+  const { project, load } = layered();
+  project("lonely", "---\nextends: lonely\n---\nX");
+  const { problems } = load();
+  assert.match(problems[0].message, /no broader layer defines `lonely`/);
+});
+
+test("profile and workflow vars are defaults, --var wins, and excludes reach the prompt", () => {
+  const profiles = profilesMap({ sec: { body: "Audit in {{vars.lang}}.", vars: { lang: "en", depth: "1" }, exclude: ["dist/**"] } });
+  const wf = workflow("---\nvars: lang=fr\nexclude: vendor/**\n---\n## a\nprovider: codex\nprofile: sec\nexclude: *.min.js\n\nDepth {{vars.depth}}, focus {{vars.focus}}");
+  const step = resolveStep(wf.steps[0], profiles);
+  assert.deepEqual(step.exclude, ["dist/**", "*.min.js"]);
+
+  const prompt = buildStepPrompt({ ...step, exclude: [...wf.exclude, ...step.exclude] }, { vars: { ...wf.vars, focus: "auth" } });
+  assert.match(prompt, /Audit in fr\./);
+  assert.match(prompt, /Depth 1, focus auth/);
+  assert.match(prompt, /Out of scope: do not read, analyze or report on files matching `vendor\/\*\*`, `dist\/\*\*`, `\*\.min\.js`\./);
+});
+
+test("flow uses workflow var defaults and fills in --effort for steps without one", () => {
+  const { hub, repo, prompts } = hubSetup();
+  write(
+    path.join(repo, ".claude", "bridges-hub", "workflows", "defaults.md"),
+    "---\nvars: target=web\n---\n## one\nprovider: fake\n\nShip {{task}} to {{vars.target}}\n\n## two\nprovider: fake\neffort: low\nafter: one\n\nok"
+  );
+  const result = hub(["flow", "--json", "--effort", "high", "defaults", "v2"]);
+  assert.equal(result.status, 0, result.stderr);
+  const [one, two] = prompts();
+  assert.match(one[1], /Ship v2 to web/);
+  assert.equal(one[one.indexOf("--effort") + 1], "high");
+  assert.equal(two[two.indexOf("--effort") + 1], "low");
+});
+
+test("list hides _partial profiles unless --all, and validate warns about long profiles", () => {
+  const { hub, repo } = hubSetup();
+  write(path.join(repo, ".claude", "bridges-hub", "profiles", "_part.md"), "---\ndescription: part\n---\nPart.");
+  write(path.join(repo, ".claude", "bridges-hub", "profiles", "huge.md"), `---\ndescription: huge\n---\n${"word ".repeat(6000)}`);
+  assert.doesNotMatch(hub(["list", "profiles"]).stdout, /_part/);
+  assert.match(hub(["list", "profiles", "--all"]).stdout, /_part/);
+
+  const validated = hub(["validate", "huge"]);
+  assert.equal(validated.status, 0, validated.stderr);
+  assert.match(validated.stdout, /Warnings:\n- profile `huge`: \d+ characters/);
 });

@@ -34,7 +34,8 @@ Raw arguments: `$ARGUMENTS`
 
    Rules:
    - The `key: value` lines come right after the heading, then a blank line, then the prompt.
-   - Step keys: `provider`, `profile`, `mode` (`read` or `write`), `model`, `effort`, `after` (comma-separated step ids), `on_failure` (`stop` or `continue`).
+   - Workflow frontmatter keys: `name`, `description`, `exclude` (globs left out of every step), `vars` (`key=value, …` defaults).
+   - Step keys: `provider`, `profile`, `mode` (`read` or `write`), `model`, `effort`, `after` (comma-separated step ids), `on_failure` (`stop` or `continue`), `exclude`.
    - A step's settings override its profile's. Without a prompt, the step works on `{{task}}`.
    - Placeholders: `{{task}}`, `{{vars.<name>}}` (from `--var name=value`), and `{{steps.<id>.output}}` / `{{steps.<id>.status}}` for steps listed, directly or indirectly, in `after`.
    - Steps without a dependency between them run in parallel; a `write` step always runs alone.

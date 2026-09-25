@@ -9,7 +9,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
-import { loadCatalog, loadFile } from "./lib/catalog.mjs";
+import { loadCatalog, loadFile, resolveProfile } from "./lib/catalog.mjs";
 import { buildSingleJobSnapshot, buildStatusSnapshot, readStoredJob, resolveCancelableJob, resolveResultJob } from "./lib/job-control.mjs";
 import { terminateProcessTree } from "./lib/process.mjs";
 import { knownProviderIds, PROVIDERS, resolveProvider } from "./lib/registry.mjs";
@@ -23,7 +23,15 @@ import {
   resolveJobKillTargets,
   runTrackedJob
 } from "./lib/tracked-jobs.mjs";
-import { buildStepPrompt, nextRunnable, requiredInputs, resolveStep, validateProfile, validateWorkflow } from "./lib/workflow.mjs";
+import {
+  buildStepPrompt,
+  nextRunnable,
+  profileWarnings,
+  requiredInputs,
+  resolveStep,
+  validateProfile,
+  validateWorkflow
+} from "./lib/workflow.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const SCRIPT = fileURLToPath(import.meta.url);
@@ -35,10 +43,10 @@ function printUsage() {
       "",
       "Usage:",
       "  node scripts/hub.mjs check [--json]",
-      "  node scripts/hub.mjs list [profiles|workflows] [--json]",
+      "  node scripts/hub.mjs list [profiles|workflows] [--all] [--json]",
       "  node scripts/hub.mjs validate [name|file.md] [--json]",
       "  node scripts/hub.mjs ask <provider> [--profile <name>] [--write] [--model <m>] [--effort <e>] [--background] [--json] [task]",
-      "  node scripts/hub.mjs flow <workflow> [--var key=value]... [--dry-run] [--max-parallel <n>] [--background] [--json] [task]",
+      "  node scripts/hub.mjs flow <workflow> [--var key=value]... [--model <m>] [--effort <e>] [--dry-run] [--max-parallel <n>] [--background] [--json] [task]",
       "  node scripts/hub.mjs runs [run-id] [--all] [--json]",
       "  node scripts/hub.mjs show [run-id] [--json]",
       "  node scripts/hub.mjs stop [run-id] [--json]",
@@ -138,11 +146,14 @@ function handleCheck(argv) {
 }
 
 function describeLayer(item) {
-  return item.overrides ? `${item.source} (overrides ${item.overrides})` : item.source;
+  if (!item.overrides) {
+    return item.source;
+  }
+  return `${item.source} (${item.extended ? "extends" : "overrides"} ${item.overrides})`;
 }
 
 function handleList(argv) {
-  const { options, positionals, workspaceRoot } = parseInput(argv);
+  const { options, positionals, workspaceRoot } = parseInput(argv, { booleanOptions: ["all"] });
   const which = positionals[0] ?? "all";
   if (!["all", "profiles", "workflows"].includes(which)) {
     throw new Error("`list` takes `profiles`, `workflows`, or nothing.");
@@ -151,7 +162,8 @@ function handleList(argv) {
   const payload = {};
   const lines = [];
   if (which !== "workflows") {
-    payload.profiles = [...profiles.items.values()].map(({ name, description, provider, mode, source, overrides, file }) => ({ name, description, provider, mode: mode ?? "read", source, overrides, file }));
+    // `_name` profiles are building blocks for `include`, hidden unless --all.
+    payload.profiles = [...profiles.items.values()].filter((item) => options.all || !item.name.startsWith("_")).map(({ name, description, provider, mode, source, overrides, extended, file }) => ({ name, description, provider, mode: mode ?? "read", source, overrides, extended, file }));
     lines.push("# Profiles", "", "| Profile | Provider | Mode | Source | Description |", "| --- | --- | --- | --- | --- |");
     for (const item of payload.profiles) {
       lines.push(`| ${item.name} | ${cell(item.provider ?? "any")} | ${item.mode} | ${cell(describeLayer(item))} | ${cell(item.description)} |`);
@@ -190,13 +202,20 @@ function handleValidate(argv) {
   const target = positionals.join(" ").trim();
   const problems = [...profiles.problems.map((p) => `${p.file}: ${p.message}`), ...workflows.problems.map((p) => `${p.file}: ${p.message}`)];
   const checked = [];
+  const warnings = [];
 
   let items;
   if (!target) {
     items = [...profiles.items.values(), ...workflows.items.values()];
   } else if (target.endsWith(".md") || fs.existsSync(target)) {
-    const item = loadFile(path.resolve(process.cwd(), target));
+    let item = loadFile(path.resolve(process.cwd(), target));
     if (item.kind === "profile") {
+      // Resolve against the catalog; `extends: <own name>` targets its top version.
+      try {
+        item = resolveProfile(item, profiles.stacks, -1);
+      } catch (error) {
+        problems.push(error.message);
+      }
       profiles.items.set(item.name, item);
     }
     items = [item];
@@ -210,12 +229,18 @@ function handleValidate(argv) {
 
   for (const item of items) {
     checked.push(`${item.kind} ${item.name}`);
-    problems.push(...(item.kind === "profile" ? validateProfile(item) : validateWorkflow(item, { profiles: profiles.items })));
+    if (item.kind === "profile") {
+      problems.push(...validateProfile(item));
+      warnings.push(...profileWarnings(item));
+    } else {
+      problems.push(...validateWorkflow(item, { profiles: profiles.items }));
+    }
   }
-  const payload = { valid: problems.length === 0, checked, problems };
+  const payload = { valid: problems.length === 0, checked, problems, warnings };
+  const warningLines = warnings.length ? `\nWarnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}\n` : "";
   const rendered = payload.valid
-    ? `Valid: ${checked.join(", ")}.\n`
-    : `# Validation failed\n\n${problems.map((problem) => `- ${problem}`).join("\n")}\n`;
+    ? `Valid: ${checked.join(", ")}.\n${warningLines}`
+    : `# Validation failed\n\n${problems.map((problem) => `- ${problem}`).join("\n")}\n${warningLines}`;
   output(options.json ? payload : rendered, options.json);
   if (!payload.valid) {
     process.exitCode = 1;
@@ -268,7 +293,7 @@ function planAsk({ options, positionals, workspaceRoot }) {
   };
 }
 
-function planFlow({ options, positionals, vars, workspaceRoot }) {
+function planFlow({ options, positionals, vars: cliVars, workspaceRoot }) {
   const [name, ...taskWords] = positionals;
   if (!name) {
     throw new Error("Usage: flow <workflow> [--var key=value]... [task]");
@@ -283,6 +308,7 @@ function planFlow({ options, positionals, vars, workspaceRoot }) {
     throw new Error(`Workflow \`${name}\` is invalid:\n${problems.map((problem) => `- ${problem}`).join("\n")}`);
   }
   const task = taskWords.join(" ").trim();
+  const vars = { ...workflow.vars, ...cliVars };
   const inputs = requiredInputs(workflow, profiles.items);
   const missing = inputs.vars.filter((key) => !(key in vars));
   if (missing.length > 0) {
@@ -295,7 +321,16 @@ function planFlow({ options, positionals, vars, workspaceRoot }) {
     kind: "workflow",
     title: `Workflow ${name}`,
     workflowName: name,
-    steps: workflow.steps.map((step) => resolveStep(step, profiles.items)),
+    // `--model`/`--effort` fill in steps that set neither themselves nor via their profile.
+    steps: workflow.steps.map((raw) => {
+      const step = resolveStep(raw, profiles.items);
+      return {
+        ...step,
+        model: step.model ?? options.model ?? null,
+        effort: step.effort ?? options.effort ?? null,
+        exclude: [...new Set([...workflow.exclude, ...step.exclude])]
+      };
+    }),
     context: { task, vars }
   };
 }
@@ -359,6 +394,14 @@ async function executePlan(plan, { cwd, workspaceRoot, jobId, maxParallel, logFi
   const stepPids = new Set();
   const stepSummary = () =>
     Object.fromEntries(plan.steps.map((step) => [step.id, { provider: step.provider, mode: step.mode }]));
+  // Bookkeeping must never abort a run (e.g. a state lock timeout under load).
+  const track = (patch) => {
+    try {
+      patchJobIfActive(workspaceRoot, jobId, patch);
+    } catch (error) {
+      appendLogLine(logFile, `Could not record progress: ${error.message}`);
+    }
+  };
   const log = (message) => {
     appendLogLine(logFile, message);
     if (echo) {
@@ -377,12 +420,12 @@ async function executePlan(plan, { cwd, workspaceRoot, jobId, maxParallel, logFi
       if (event.type === "step-start") {
         log(`Step ${event.step.id}: ${event.provider.label} (${event.step.mode}) started.`);
         if (jobId) {
-          patchJobIfActive(workspaceRoot, jobId, { phase: `step ${event.step.id}`, steps: stepSummary() });
+          track({ phase: `step ${event.step.id}`, steps: stepSummary() });
         }
       } else if (event.type === "step-spawn" && event.pid) {
         stepPids.add(event.pid);
         if (jobId) {
-          patchJobIfActive(workspaceRoot, jobId, { agentPid: event.pid, stepPids: [...stepPids] });
+          track({ agentPid: event.pid, stepPids: [...stepPids] });
         }
       } else if (event.type === "step-end") {
         log(`Step ${event.step.id}: ${event.result.status} in ${formatDuration(event.result.durationMs)}.`);
@@ -562,7 +605,11 @@ async function main() {
       return launchPlan(planAsk(parsed), parsed);
     }
     case "flow": {
-      const parsed = parseInput(argv, { leading: 1, valueOptions: ["max-parallel"], booleanOptions: ["background", "dry-run"] });
+      const parsed = parseInput(argv, {
+        leading: 1,
+        valueOptions: ["max-parallel", "model", "effort"],
+        booleanOptions: ["background", "dry-run"]
+      });
       return launchPlan(planFlow(parsed), parsed);
     }
     case "flow-worker":

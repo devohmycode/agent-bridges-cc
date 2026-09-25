@@ -52,6 +52,16 @@ export function validateProfile(profile, { env = process.env } = {}) {
   return problems;
 }
 
+// Above this, bridges driving a CLI through an argument hand the agent a
+// file to read instead, and long roles tend to be read only in part.
+const LONG_PROFILE_CHARS = 24000;
+
+export function profileWarnings(profile) {
+  return profile.body.length > LONG_PROFILE_CHARS
+    ? [`profile \`${profile.name}\`: ${profile.body.length} characters once resolved; agents may skim a role this long. Prefer \`include: <name>#<Section>\` for the parts a step needs.`]
+    : [];
+}
+
 /** Ancestors of every step, or null when `after` has a cycle. */
 function ancestorsOf(steps) {
   const byId = new Map(steps.map((step) => [step.id, step]));
@@ -98,7 +108,8 @@ export function resolveStep(step, profiles) {
     provider: normalizeProviderId(step.provider ?? profile?.provider ?? ""),
     mode: step.mode ?? profile?.mode ?? "read",
     model: step.model ?? profile?.model ?? null,
-    effort: step.effort ?? profile?.effort ?? null
+    effort: step.effort ?? profile?.effort ?? null,
+    exclude: [...new Set([...(profile?.exclude ?? []), ...(step.exclude ?? [])])]
   };
 }
 
@@ -173,11 +184,12 @@ export function requiredInputs(workflow, profiles) {
   let task = false;
   for (const raw of workflow.steps) {
     const step = resolveStep(raw, profiles);
+    const defaults = { ...(step.profileItem?.vars ?? {}), ...(workflow.vars ?? {}) };
     for (const text of [step.prompt, step.profileItem?.body]) {
       for (const name of placeholders(text)) {
         if (name === "task") {
           task = true;
-        } else if (name.startsWith("vars.")) {
+        } else if (name.startsWith("vars.") && !(name.slice(5) in defaults)) {
           vars.add(name.slice(5));
         }
       }
@@ -211,7 +223,9 @@ export function interpolate(text, context) {
  * The prompt sent to the provider: the profile as a role, then the step
  * instructions. A step without a prompt works on the task itself.
  */
-export function buildStepPrompt(step, context) {
+export function buildStepPrompt(step, baseContext) {
+  // A profile's `vars` are defaults: the workflow's and `--var` win.
+  const context = { ...baseContext, vars: { ...(step.profileItem?.vars ?? {}), ...(baseContext.vars ?? {}) } };
   const instructions = step.prompt ? interpolate(step.prompt, context) : context.task ?? "";
   const role = step.profileItem ? interpolate(step.profileItem.body, context).trim() : "";
   const sections = [];
@@ -220,6 +234,9 @@ export function buildStepPrompt(step, context) {
   }
   if (instructions.trim()) {
     sections.push(instructions.trim());
+  }
+  if (step.exclude?.length) {
+    sections.push(`Out of scope: do not read, analyze or report on files matching ${step.exclude.map((glob) => `\`${glob}\``).join(", ")}.`);
   }
   if (step.mode === "read") {
     sections.push("Do not modify any file: this step is read-only.");

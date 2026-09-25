@@ -120,7 +120,22 @@ Corrige ce qui est fondé dans cette revue : {{steps.review.output}}
 Clés d'étape : `provider`, `profile`, `mode` (`read`/`write`), `model`,
 `effort`, `after`, `on_failure` (`stop`/`continue`). Variables : `{{task}}`,
 `{{vars.<nom>}}` (`--var nom=valeur`), `{{steps.<id>.output}}` et
-`{{steps.<id>.status}}`. `/bridges-hub:new-profile` et
+`{{steps.<id>.status}}`. Le frontmatter d'un workflow peut fixer `exclude`
+(globs que toutes les étapes laissent de côté) et `vars` (valeurs par défaut
+`clé=valeur, …`) ; `flow --model` / `--effort` complètent les étapes qui n'en
+fixent pas.
+
+Un profil peut s'appuyer sur un autre au lieu de le remplacer :
+
+- `extends: security-review` ajoute chaque `## Section` du fichier sous la
+  même section du profil de base, en la marquant comme prioritaire ; un profil
+  de projet qui porte le nom de sa base étend la version utilisateur ou
+  fournie ;
+- `include: _commun#Remediation, implementer` ajoute un autre profil ou l'une
+  de ses sections (les profils `_nom` sont masqués dans `list`) ;
+- `exclude` et `vars` fonctionnent comme dans les workflows.
+
+`/bridges-hub:new-profile` et
 `/bridges-hub:new-workflow` rédigent et valident un fichier pour vous ;
 `validate [nom|fichier]` en vérifie un à la main.
 

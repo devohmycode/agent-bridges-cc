@@ -118,7 +118,20 @@ Fix what is real in this review: {{steps.review.output}}
 Step keys: `provider`, `profile`, `mode` (`read`/`write`), `model`, `effort`,
 `after`, `on_failure` (`stop`/`continue`). Placeholders: `{{task}}`,
 `{{vars.<name>}}` (`--var name=value`), `{{steps.<id>.output}}` and
-`{{steps.<id>.status}}`. `/bridges-hub:new-profile` and
+`{{steps.<id>.status}}`. A workflow's frontmatter may set `exclude` (globs
+every step leaves out) and `vars` (`key=value, …` defaults); `flow --model` /
+`--effort` fill in the steps that set neither.
+
+A profile can build on another instead of replacing it:
+
+- `extends: security-review` appends each `## Section` of the file under the
+  same section of the base, marked as taking precedence; a project profile
+  named like its base extends the user or built-in version;
+- `include: _shared#Remediation, implementer` appends another profile or one
+  of its sections (`_name` profiles are hidden from `list`);
+- `exclude` and `vars` work as on workflows.
+
+`/bridges-hub:new-profile` and
 `/bridges-hub:new-workflow` write and validate a file for you;
 `validate [name|file]` checks one by hand.
 

@@ -1,6 +1,6 @@
 ---
 description: Run a multi-provider workflow (several bridges chained on one task)
-argument-hint: '<workflow> [--var key=value]... [--max-parallel <n>] [--wait|--background] [--dry-run] [task]'
+argument-hint: '<workflow> [--var key=value]... [--model <m>] [--effort <e>] [--max-parallel <n>] [--wait|--background] [--dry-run] [task]'
 disable-model-invocation: true
 allowed-tools: Bash(node:*), AskUserQuestion
 ---

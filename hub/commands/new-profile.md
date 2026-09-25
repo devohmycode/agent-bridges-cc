@@ -25,6 +25,11 @@ Raw arguments: `$ARGUMENTS`
    <the role, written to the agent: what to focus on, what to ignore, what to return>
    ```
 
-   Only these keys are allowed: `name`, `description`, `mode`, `provider`, `model`, `effort`. The body may use `{{task}}` and `{{vars.<name>}}`.
+   Allowed keys: `name`, `description`, `mode`, `provider`, `model`, `effort`, and:
+   - `extends: <profile>` to add project-specific guidance to an existing profile instead of copying it: each `## Section` of this file is appended under the same section of the base, marked as taking precedence. A profile named like its base (for example a project `security-review.md` with `extends: security-review`) extends the user or built-in version;
+   - `include: <profile>[#<Section>], …` to append another profile, or one of its sections (profiles named `_…` are building blocks, hidden from `list`);
+   - `exclude: <glob>, …` for files the agent must leave out;
+   - `vars: key=value, …` for default values of `{{vars.<key>}}`.
+   The body may use `{{task}}` and `{{vars.<name>}}`.
 4. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub.mjs" validate "<path to the file>"` and fix the file until it passes.
 5. Tell the user how to use it: `/bridges-hub:ask <provider> --profile <name> <task>`, or `profile: <name>` in a workflow step.

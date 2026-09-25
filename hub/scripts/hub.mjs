@@ -8,7 +8,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
+import { expandRawArguments, parseArgs } from "./lib/args.mjs";
 import { loadCatalog, loadFile, resolveProfile } from "./lib/catalog.mjs";
 import { buildSingleJobSnapshot, buildStatusSnapshot, readStoredJob, resolveCancelableJob, resolveResultJob } from "./lib/job-control.mjs";
 import { terminateProcessTree } from "./lib/process.mjs";
@@ -65,8 +65,8 @@ function output(value, asJson) {
  * the first word of the task is task text, so a task may mention `--flags`.
  */
 function parseInput(argv, config = {}) {
-  const tokens = argv.length === 1 ? splitRawArgumentString(argv[0] ?? "") : argv;
   const valueOptions = ["cwd", ...(config.valueOptions ?? [])];
+  const tokens = expandRawArguments(argv, valueOptions);
   const takesValue = new Set([...valueOptions.map((name) => `--${name}`), "-C", "-m"]);
   const vars = {};
   const rest = [];

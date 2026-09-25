@@ -6,7 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
+import { expandRawArguments, parseArgs } from "./lib/args.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { adapter, bridgeCommand } from "./lib/adapter.mjs";
@@ -119,19 +119,9 @@ function normalizeReasoningEffort(effort) {
   return normalized;
 }
 
-function normalizeArgv(argv) {
-  if (argv.length === 1) {
-    const [raw] = argv;
-    if (!raw || !raw.trim()) {
-      return [];
-    }
-    return splitRawArgumentString(raw);
-  }
-  return argv;
-}
 
 function parseCommandInput(argv, config = {}) {
-  const parsed = parseArgs(normalizeArgv(argv), {
+  const parsed = parseArgs(expandRawArguments(argv, config.valueOptions), {
     ...config,
     unknownMode: config.unknownMode ?? "warn",
     aliasMap: {

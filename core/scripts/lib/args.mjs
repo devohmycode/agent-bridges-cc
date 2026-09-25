@@ -142,3 +142,33 @@ export function splitRawArgumentString(raw) {
 
   return tokens;
 }
+
+/**
+ * Turn the argv of a command into tokens. Slash commands pass `$ARGUMENTS` as one
+ * quoted string, sometimes after flags the command adds itself
+ * (`review --background "$ARGUMENTS"`, `run --write "<task>"`): that string is split
+ * too. It is left whole when it is the value of a value option, or when other
+ * values come before it — a caller that already passes structured argv.
+ */
+export function expandRawArguments(argv, valueOptions = []) {
+  if (argv.length === 0) {
+    return [];
+  }
+  if (argv.length === 1) {
+    return argv[0] && argv[0].trim() ? splitRawArgumentString(argv[0]) : [];
+  }
+  const raw = argv[argv.length - 1];
+  const leading = argv.slice(0, -1);
+  const takesValue = new Set(valueOptions.map((name) => `--${name}`));
+  const onlyFlags = leading.every((token) => token.startsWith("-") && (token.includes("=") || !takesValue.has(token)));
+  if (!onlyFlags) {
+    return argv;
+  }
+  if (!raw.trim()) {
+    return leading;
+  }
+  if (!/\s/.test(raw.trim())) {
+    return argv;
+  }
+  return [...leading, ...splitRawArgumentString(raw)];
+}

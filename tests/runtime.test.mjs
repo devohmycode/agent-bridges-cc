@@ -132,6 +132,27 @@ test("review and critique forward --model and --effort, read-only", () => {
   }
 });
 
+test("a quoted $ARGUMENTS string after the command's own flags is still split", () => {
+  // review.md runs `review --background "$ARGUMENTS"`; the delegate agent may run `run --write "<task>"`.
+  const { env, log } = setup();
+  const repo = reviewableRepo();
+  const result = runBridge(["critique", "--json", "--model fake-model --effort high focus on auth"], { cwd: repo, env: env() });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /unknown option/i);
+  const argv = lastPrintArgv(log);
+  assert.equal(argv[argv.indexOf("--model") + 1], "fake-model");
+  assert.equal(argv[argv.indexOf("--effort") + 1], "high");
+  assert.match(argv[1], /focus on auth/);
+
+  const writable = setup();
+  const run = runBridge(["run", "--write", "--model fake-model make the change"], { cwd: repo, env: writable.env() });
+  assert.equal(run.status, 0, run.stderr);
+  const runArgv = lastPrintArgv(writable.log);
+  assert.ok(!runArgv.includes("--read-only"));
+  assert.equal(runArgv[runArgv.indexOf("--model") + 1], "fake-model");
+  assert.equal(runArgv[1], "make the change");
+});
+
 test("review rejects effort values the provider does not list", () => {
   const { env } = setup();
   const repo = reviewableRepo();

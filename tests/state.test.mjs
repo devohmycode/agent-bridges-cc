@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 
 import { makeTempDir } from "./helpers.mjs";
 import {
+  ensurePrivateDir,
+  ensureStateDir,
   loadState,
   resolveJobFile,
   resolveJobLogFile,
@@ -143,4 +145,35 @@ test("loadState returns default state when the file is missing", () => {
   assert.equal(state.version, 1);
   assert.deepEqual(state.jobs, []);
   assert.deepEqual(state.config, {});
+});
+
+test("ensurePrivateDir refuses a directory owned by another account", () => {
+  const dir = path.join(makeTempDir(), "runs");
+  fs.mkdirSync(dir);
+  const otherUid = fs.lstatSync(dir).uid + 1;
+  assert.throws(() => ensurePrivateDir(dir, otherUid), /not a directory owned by the current user/);
+});
+
+test("ensurePrivateDir refuses a non-directory at the path", () => {
+  const file = path.join(makeTempDir(), "runs");
+  fs.writeFileSync(file, "", "utf8");
+  assert.throws(() => ensurePrivateDir(file, fs.lstatSync(file).uid), /not a directory owned by the current user/);
+});
+
+test("ensurePrivateDir tightens a group or world accessible directory", { skip: process.platform === "win32" }, () => {
+  const dir = path.join(makeTempDir(), "runs");
+  fs.mkdirSync(dir);
+  fs.chmodSync(dir, 0o777);
+  ensurePrivateDir(dir);
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+});
+
+test("the tmp fallback state root is owner-only", { skip: process.platform === "win32" }, () => {
+  withEnv({ AGENT_BRIDGES_DATA_FAKE: null, CLAUDE_PLUGIN_DATA: null }, () => {
+    const workspace = makeTempDir();
+    ensureStateDir(workspace);
+    const root = path.dirname(resolveStateDir(workspace));
+    assert.match(root, /fake-bridge-runs$/);
+    assert.equal(fs.statSync(root).mode & 0o077, 0);
+  });
 });

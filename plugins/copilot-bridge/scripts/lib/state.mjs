@@ -82,7 +82,40 @@ export function resolveJobsDir(cwd) {
   return path.join(resolveStateDir(cwd), JOBS_DIR_NAME);
 }
 
+// On POSIX the tmp fallback is shared by every local account and its name is
+// predictable: create it owner-only and refuse one that another account
+// pre-created, so nobody else can read or swap job files (a background hub
+// worker executes the plan it reads back). Windows tmp is already per-user.
+export function ensurePrivateDir(dir, uid = process.getuid?.()) {
+  if (uid === undefined) {
+    fs.mkdirSync(dir, { recursive: true });
+    return;
+  }
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  try {
+    fs.mkdirSync(dir, { mode: 0o700 });
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      throw error;
+    }
+  }
+  const stat = fs.lstatSync(dir);
+  if (!stat.isDirectory() || stat.uid !== uid) {
+    throw new Error(`Refusing state directory ${dir}: it is not a directory owned by the current user.`);
+  }
+  if ((stat.mode & 0o077) !== 0) {
+    fs.chmodSync(dir, 0o700);
+  }
+}
+
+function guardFallbackStateRoot(stateDir) {
+  if (path.dirname(stateDir) === FALLBACK_STATE_ROOT_DIR) {
+    ensurePrivateDir(FALLBACK_STATE_ROOT_DIR);
+  }
+}
+
 export function ensureStateDir(cwd) {
+  guardFallbackStateRoot(resolveStateDir(cwd));
   fs.mkdirSync(resolveJobsDir(cwd), { recursive: true });
 }
 
@@ -310,6 +343,7 @@ export function patchJobIfActive(cwd, jobId, patch = {}) {
 }
 
 export function loadState(cwd) {
+  guardFallbackStateRoot(resolveStateDir(cwd));
   const stateFile = resolveStateFile(cwd);
   if (!fs.existsSync(stateFile)) {
     return defaultState();
